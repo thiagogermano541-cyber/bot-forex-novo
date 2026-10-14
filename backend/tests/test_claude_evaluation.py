@@ -14,12 +14,18 @@ async def test_claude_uses_official_contract_and_grounding(snapshot, wait_analys
     client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
                            claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     count = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
+    aliased = wait_analysis.model_copy(deep=True)
+    for evidence in aliased.evidence:
+        evidence.source_ids = ["M1_C30"]
+    for scenario in aliased.scenarios:
+        scenario.evidence_ids = ["M1_C30"]
     create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-                       content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=wait_analysis.model_dump(mode="json"))]))
+                       content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=aliased.model_dump(mode="json"))]))
     client.client.messages.count_tokens = count
     client.client.messages.create = create
     result, usage = await client.analyze(snapshot, [])
     assert result.decision == "AGUARDAR"
+    assert result.evidence[0].source_ids == [snapshot.candles["M1"][-1].id]
     assert usage["cost_usd"] == pytest.approx(0.0015)
     assert create.call_args.kwargs["tool_choice"]["name"] == "submit_analysis"
     await client.client.close()

@@ -33,6 +33,8 @@ No máximo 6 evidências, 4 zonas, 3 riscos e 3 condições por cenário.
 Cada timeframe_context até 35 palavras e cada tese até 60 palavras.
 Use até 3 IDs exatos por item. Registre somente padrões sustentados pelos dados;
 não preencha todos os tipos de padrão apenas para completar uma lista.
+Use os IDs curtos recebidos, como M1_C01 e Q_CURRENT, exatamente como escritos.
+Não invente IDs e não use IDs da memória anterior como evidência do snapshot atual.
 """
 
 
@@ -52,6 +54,23 @@ class ClaudeClient:
         context = snapshot.model_dump(mode="json")
         context["candles"] = {tf: [r.model_dump(mode="json") for r in rows[-30:]] for tf, rows in snapshot.candles.items()}
         context["trades"] = context["trades"][-20:]
+        original_supplied = Snapshot.model_validate(context)
+        references = {}
+        for tf, rows in context["candles"].items():
+            for index, row in enumerate(rows, 1):
+                alias = f"{tf}_C{index:02d}"
+                references[alias] = row["id"]
+                row["id"] = alias
+        for index, row in enumerate(context["trades"], 1):
+            alias = f"TRADE_{index:02d}"
+            references[alias] = row["id"]
+            row["id"] = alias
+        if context["quote"]:
+            references["Q_CURRENT"] = context["quote"]["id"]
+            context["quote"]["id"] = "Q_CURRENT"
+        if context["order_book"]:
+            references["BOOK_CURRENT"] = context["order_book"]["id"]
+            context["order_book"]["id"] = "BOOK_CURRENT"
         # Validate citations against exactly what was sent, rather than withheld history.
         supplied = Snapshot.model_validate(context)
         # Keep source IDs and every OHLCV number, but send repeated candle metadata
@@ -62,7 +81,9 @@ class ClaudeClient:
                 metadata_by_tf[tf] = {"provider": rows[0]["provider"], "volume_kind": rows[0]["volume_kind"]}
                 context["candles"][tf] = [{k: v for k, v in row.items() if k not in ("timeframe", "provider", "volume_kind")} for row in rows]
         context["candle_metadata"] = metadata_by_tf
-        payload = json.dumps({"market_data": context, "previous_analyses": memory}, ensure_ascii=False, separators=(",", ":"))
+        previous = [{**row, "scenarios": [{k: v for k, v in scenario.items() if k != "evidence_ids"}
+                                         for scenario in row.get("scenarios", [])]} for row in memory]
+        payload = json.dumps({"market_data": context, "previous_analyses": previous}, ensure_ascii=False, separators=(",", ":"))
         messages = [{"role": "user", "content": payload}]
         tool = {"name": "submit_analysis", "description": "Retorna análise financeira estruturada, sem executar ações.",
                 "input_schema": Analysis.model_json_schema()}
@@ -92,6 +113,15 @@ class ClaudeClient:
             if response.stop_reason != "tool_use" or len(blocks) != 1:
                 raise ValueError(f"Resposta incompleta: {response.stop_reason}; blocos estruturados: {len(blocks)}")
             analysis = Analysis.model_validate(blocks[0].input).validate_grounding(supplied)
+            # Persist the provider's original identifiers, so every citation still
+            # points to the exact immutable snapshot that the operator can export.
+            for evidence in analysis.evidence:
+                evidence.source_ids = [references.get(ref, ref) for ref in evidence.source_ids]
+            for zone in analysis.zones:
+                zone.source_ids = [references.get(ref, ref) for ref in zone.source_ids]
+            for scenario in analysis.scenarios:
+                scenario.evidence_ids = [references.get(ref, ref) for ref in scenario.evidence_ids]
+            analysis.validate_grounding(original_supplied)
         except ValueError as exc:
             # Usage must still be accounted even if output cannot be trusted.
             if isinstance(exc, ValidationError):

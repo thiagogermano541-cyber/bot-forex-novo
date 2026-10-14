@@ -6,6 +6,7 @@ import httpx
 import structlog
 from pydantic import ValidationError
 from redis.asyncio import Redis
+from redis.exceptions import LockError
 from sqlalchemy import text
 
 from .config import settings
@@ -64,6 +65,7 @@ async def collect_loop(service):
 
 async def analysis_loop(service):
     while True:
+        delay = service.config.analysis_interval_seconds
         if service.config.claude_ready:
             for asset in ACTIVE_ASSETS:
                 try:
@@ -71,10 +73,13 @@ async def analysis_loop(service):
                     await service.redis.delete(f"analysis_error:{asset}")
                 except asyncio.CancelledError:
                     raise
+                except LockError:
+                    delay = 5
+                    log.info("analysis_waiting_for_lease", asset=asset)
                 except Exception as exc:
                     await service.redis.set(f"analysis_error:{asset}", type(exc).__name__, ex=3600)
                     log.error("analysis_failed", asset=asset, error_type=type(exc).__name__)
-        await asyncio.sleep(service.config.analysis_interval_seconds)
+        await asyncio.sleep(delay)
 
 
 async def verify_public_once():
