@@ -4,6 +4,7 @@ import random
 
 import httpx
 import structlog
+from pydantic import ValidationError
 from redis.asyncio import Redis
 from sqlalchemy import text
 
@@ -11,8 +12,7 @@ from .config import settings
 from .db import Session
 from .evaluation import evaluate_pending
 from .providers.kraken import Kraken
-from .providers.oanda import Oanda
-from .schemas import utcnow
+from .schemas import ACTIVE_ASSETS, utcnow
 from .service import AnalysisService
 from .telegram import deliver
 
@@ -45,10 +45,49 @@ async def heartbeat(redis):
         await asyncio.sleep(10)
 
 
+async def collect_loop(service):
+    while True:
+        for asset in ACTIVE_ASSETS:
+            try:
+                log.info("market_collection_started", asset=asset)
+                async with asyncio.timeout(75):
+                    await service.collect(asset)
+                await service.redis.delete(f"error:{asset}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await service.redis.set(f"error:{asset}", type(exc).__name__, ex=3600)
+                log.error("market_collection_failed", asset=asset, error_type=type(exc).__name__,
+                          validation_errors=[{"field": str(e["loc"]), "message": e["msg"]} for e in exc.errors(include_input=False)] if isinstance(exc, ValidationError) else [])
+        await asyncio.sleep(service.config.market_refresh_seconds)
+
+
+async def analysis_loop(service):
+    while True:
+        if service.config.claude_ready:
+            for asset in ACTIVE_ASSETS:
+                try:
+                    await service.run(asset)
+                    await service.redis.delete(f"analysis_error:{asset}")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    await service.redis.set(f"analysis_error:{asset}", type(exc).__name__, ex=3600)
+                    log.error("analysis_failed", asset=asset, error_type=type(exc).__name__)
+        await asyncio.sleep(service.config.analysis_interval_seconds)
+
+
+async def verify_public_once():
+    from .verify import main as verify
+    try:
+        await verify()
+    except Exception as exc:
+        log.error("public_verification_failed", error_type=type(exc).__name__)
+
+
 async def main():
     cfg = settings()
     redis = Redis.from_url(cfg.redis_url, decode_responses=True)
-    # Railway starts services independently. Wait for API-created schema and cache.
     for attempt in range(36):
         try:
             await redis.ping()
@@ -60,41 +99,34 @@ async def main():
                 raise RuntimeError("Database/cache/schema not ready for worker") from None
             log.warning("worker_waiting_for_dependencies", error_type=type(exc).__name__)
             await asyncio.sleep(5)
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
         service = AnalysisService(redis, client)
-        tasks = [asyncio.create_task(heartbeat(redis))]
+        tasks = [asyncio.create_task(heartbeat(redis)), asyncio.create_task(collect_loop(service))]
         if cfg.kraken_enabled:
             tasks.append(asyncio.create_task(stream_loop(Kraken(client), "BTC/USD", redis)))
-        if cfg.oanda_ready:
-            tasks.append(asyncio.create_task(stream_loop(Oanda(client, cfg), "XAU/USD", redis)))
+        log.info("worker_started", assets=list(ACTIVE_ASSETS), claude_enabled=cfg.claude_ready)
+        if cfg.verify_btc_on_start:
+            from .diagnose_market import main as diagnose
+            tasks.append(asyncio.create_task(diagnose()))
         try:
-            last_analysis, last_collect = -float("inf"), -float("inf")
+            for _ in range(30):
+                if await redis.get("snapshot:BTC/USD"):
+                    break
+                await asyncio.sleep(2)
+            tasks.append(asyncio.create_task(analysis_loop(service)))
+            if cfg.verify_btc_on_start:
+                tasks.append(asyncio.create_task(verify_public_once()))
             while True:
-                now = asyncio.get_running_loop().time()
-                analyze = now-last_analysis >= max(cfg.analysis_interval_seconds, 60) and cfg.claude_ready
-                collect = now-last_collect >= 60
-                if analyze or collect:
-                    if analyze:
-                        last_analysis = now
-                    last_collect = now
-                    for asset in ("BTC/USD", "XAU/USD"):
-                        try:
-                            if analyze:
-                                await service.run(asset)
-                            else:
-                                await service.collect(asset)
-                            await redis.delete(f"error:{asset}")
-                        except Exception as exc:
-                            await redis.set(f"error:{asset}", type(exc).__name__, ex=3600)
-                            log.error("analysis_failed", asset=asset, error_type=type(exc).__name__)
                 try:
-                    # One worker owns the outbox/evaluation lease across replicas.
                     async with redis.lock("jarvis:outbox", timeout=180, blocking_timeout=1):
                         async with Session() as session:
                             await deliver(session, client, cfg)
                             await evaluate_pending(session, cfg.evaluation_horizon_minutes)
                 except Exception as exc:
                     log.error("outbox_failed", error_type=type(exc).__name__)
+                for task in tasks:
+                    if task.done() and not task.cancelled() and task.exception():
+                        raise task.exception()
                 await asyncio.sleep(5)
         finally:
             for task in tasks:

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     daily_ai_budget_usd: float = Field(default=5, ge=0, allow_inf_nan=False)
     analysis_interval_seconds: int = Field(default=300, ge=60)
     stale_after_seconds: int = Field(default=90, ge=10, le=600)
+    market_refresh_seconds: int = Field(default=30, ge=15, le=120)
+    verify_btc_on_start: bool = False
     kraken_enabled: bool = True
     oanda_token: SecretStr = SecretStr("")
     oanda_account_id: str = ""

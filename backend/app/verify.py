@@ -6,6 +6,7 @@ import logging
 import httpx
 
 from .config import settings
+from .schemas import TIMEFRAMES
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -47,12 +48,33 @@ async def main():
         config.raise_for_status()
         if any(key in config.json() for key in ("jwt_secret", "anthropic_api_key", "admin_password")):
             raise RuntimeError("Sensitive configuration exposed")
-        for path in ("markets", "analyses", "alerts", "metrics"):
+        market_summary = None
+        for attempt in range(40):
+            market_response = await client.get(f"{origin}/api/markets")
+            market_response.raise_for_status()
+            rows = market_response.json()
+            if len(rows) == 1 and rows[0]["asset"] == "BTC/USD":
+                snapshot = rows[0].get("snapshot")
+                if snapshot and snapshot.get("quote") and all(len(snapshot["candles"].get(tf, [])) >= 20 for tf in TIMEFRAMES):
+                    if rows[0]["status"] == "ATUALIZADO":
+                        market_summary = {"asset": rows[0]["asset"], "status": rows[0]["status"],
+                                          "provider": snapshot["quote"]["provider"], "snapshot_at": snapshot["captured_at"],
+                                          "candles": {tf: len(snapshot["candles"][tf]) for tf in TIMEFRAMES}}
+                        break
+            await asyncio.sleep(3)
+        if not market_summary:
+            raise RuntimeError("Fresh BTC quote and six candle timeframes not available publicly")
+        # Other assets must be rejected before any provider or AI request is made.
+        denied = await client.post(f"{origin}/api/analyses", headers={"Origin": origin}, json={"asset": "XAU/USD"})
+        if denied.status_code != 422:
+            raise RuntimeError("Non-BTC analysis was not rejected")
+        for path in ("analyses", "alerts", "metrics"):
             result = await client.get(f"{origin}/api/{path}")
             result.raise_for_status()
         await client.post(f"{origin}/api/auth/logout", headers={"Origin": origin}, json={})
         print(json.dumps({"event": "public_login_verified", "status": "PASS", "domain": origin,
                           "claude_status": config.json().get("claude"),
+                          "btc_market": market_summary,
                           "checks": ["dashboard", "readiness", "login", "secure_cookie", "permissions", "markets", "history", "alerts", "metrics", "no_exposed_secrets"]}), flush=True)
 
 

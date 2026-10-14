@@ -5,7 +5,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TIMEFRAMES = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
-Asset = Literal["BTC/USD", "XAU/USD"]
+Asset = Literal["BTC/USD"]
+StoredAsset = Literal["BTC/USD", "XAU/USD"]
+ACTIVE_ASSETS = ("BTC/USD",)
 
 
 def utcnow():
@@ -52,7 +54,7 @@ class Quote(StrictModel):
 
 
 class Snapshot(StrictModel):
-    asset: Asset
+    asset: StoredAsset
     captured_at: datetime
     candles: dict[str, list[Candle]]
     quote: Quote | None = None

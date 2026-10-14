@@ -3,10 +3,13 @@ import json
 from datetime import datetime, timezone
 
 import httpx
+import structlog
 from websockets.asyncio.client import connect
 
 from ..schemas import Candle, Quote, Snapshot, TIMEFRAMES, utcnow
 from .base import get_json
+
+log = structlog.get_logger()
 
 
 class Kraken:
@@ -37,18 +40,16 @@ class Kraken:
         for tf in TIMEFRAMES:
             try:
                 candles[tf] = await self.candles(tf)
-            except (httpx.HTTPError, ValueError, KeyError):
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                log.warning("kraken_ohlc_failed", timeframe=tf, error_type=type(exc).__name__,
+                            http_status=exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None)
                 issues.append(f"Kraken: falha OHLC {tf}")
             await asyncio.sleep(0.15)
         quote = None
         trades = []
         book = None
+        limitations = []
         try:
-            result = await self.request("Trades", pair="XBTUSD", count=40)
-            rows = next(v for k, v in result.items() if k != "last")[-40:]
-            trades = [dict(id=f"kraken:trade:{r[6] if len(r)>6 else r[2]}", price=float(r[0]),
-                           volume=float(r[1]), timestamp=datetime.fromtimestamp(float(r[2]), timezone.utc).isoformat(),
-                           side=r[3], provider="Kraken") for r in rows]
             result = await self.request("Depth", pair="XBTUSD", count=25)
             data = next(iter(result.values()))
             received = utcnow()
@@ -59,11 +60,23 @@ class Kraken:
                         scope="Livro local da exchange; não representa todo o mercado BTC",
                         bids=[[float(r[0]), float(r[1])] for r in data["bids"]],
                         asks=[[float(r[0]), float(r[1])] for r in data["asks"]])
-        except (httpx.HTTPError, ValueError, KeyError):
-            issues.append("Kraken: falha em trades ou profundidade")
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("kraken_depth_failed", error_type=type(exc).__name__,
+                        http_status=exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None)
+            limitations.append("Kraken: livro de ofertas indisponível; sem inferência de absorção de ordens.")
+        try:
+            result = await self.request("Trades", pair="XBTUSD", count=40)
+            rows = next(v for k, v in result.items() if k != "last")[-40:]
+            trades = [dict(id=f"kraken:trade:{r[6] if len(r)>6 else r[2]}", price=float(r[0]),
+                           volume=float(r[1]), timestamp=datetime.fromtimestamp(float(r[2]), timezone.utc).isoformat(),
+                           side=r[3], provider="Kraken") for r in rows]
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("kraken_trades_failed", error_type=type(exc).__name__,
+                        http_status=exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None)
+            limitations.append("Kraken: trades recentes indisponíveis.")
         return Snapshot(asset="BTC/USD", captured_at=utcnow(), candles=candles, quote=quote,
                         trades=trades, order_book=book, issues=issues,
-                        limitations=["Liquidações e derivativos não disponíveis neste conector spot.",
+                        limitations=limitations+["Liquidações e derivativos não disponíveis neste conector spot.",
                                      "Volumes e livro limitados à Kraken; ordens ocultas não observáveis."])
 
     async def stream(self):

@@ -33,7 +33,8 @@ async def test_auth_integrity_and_persistence(monkeypatch):
                 async def __aexit__(self, *args):
                     return False
             fake_redis.lock = lambda *a, **kw: Lease()
-            response = await client.post("/analyses", headers=origin, json={"asset": "XAU/USD"})
+            assert (await client.post("/analyses", headers=origin, json={"asset": "XAU/USD"})).status_code == 422
+            response = await client.post("/analyses", headers=origin, json={"asset": "BTC/USD"})
             assert response.status_code == 200
             assert response.json()["decision"] == "DADOS INSUFICIENTES"
             assert response.json()["model"] == "integrity-gate"

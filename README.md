@@ -1,6 +1,10 @@
 # JARVIS AI
 
-Primeira versão de uma plataforma local de análise contextual de **BTC/USD** e **XAU/USD** com a API oficial da Anthropic. Claude interpreta o mercado; o backend fornece dados, verifica integridade, valida JSON, registra contexto e distribui notificações. Não existe motor de indicadores tomando decisões direcionais nem execução de ordens.
+Primeira versão de uma plataforma local de análise contextual de **BTC/USD** com a API oficial da Anthropic. Claude interpreta o mercado; o backend fornece dados, verifica integridade, valida JSON, registra contexto e distribui notificações. Não existe motor de indicadores tomando decisões direcionais nem execução de ordens.
+
+## Escopo atual
+
+Somente BTC/USD está habilitado no worker, na API e no dashboard. A análise de XAU/USD foi desativada; registros legados permanecem no banco. A coleta REST roda separadamente das chamadas Claude, a cada 30 segundos, com reconexão WebSocket e validação de candles fechados.
 
 ## Estado desta entrega
 

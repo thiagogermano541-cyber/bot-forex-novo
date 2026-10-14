@@ -11,9 +11,7 @@ from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse
 from .config import settings
 from .db import Alert, AnalysisRecord, Audit, MarketSnapshot, Session
 from .providers.kraken import Kraken
-from .providers.macro import fred_observations
-from .providers.oanda import Oanda
-from .schemas import Analysis, Decision, Quote, Snapshot, utcnow
+from .schemas import ACTIVE_ASSETS, Analysis, Decision, Quote, Snapshot, utcnow
 from .telegram import enqueue
 
 log = structlog.get_logger()
@@ -37,17 +35,14 @@ class AnalysisService:
         self.claude = ClaudeClient(self.config)
 
     async def collect(self, asset):
+        if asset not in ACTIVE_ASSETS:
+            raise ValueError("Somente BTC/USD está habilitado")
+        async with self.redis.lock(f"jarvis:collect:{asset}", timeout=120, blocking_timeout=1):
+            return await self._collect(asset)
+
+    async def _collect(self, asset):
         if asset == "BTC/USD" and self.config.kraken_enabled:
             snapshot = await Kraken(self.http).snapshot()
-        elif asset == "XAU/USD":
-            snapshot = await Oanda(self.http, self.config).snapshot()
-            if self.config.fred_api_key.get_secret_value():
-                try:
-                    snapshot.macro = await fred_observations(self.http, self.config.fred_api_key.get_secret_value())
-                except Exception:
-                    snapshot.limitations.append("FRED temporariamente indisponível")
-            else:
-                snapshot.limitations.append("Dados macro FRED NÃO CONFIGURADO")
         else:
             snapshot = Snapshot(asset=asset, captured_at=utcnow(), candles={}, issues=["Provedor NÃO CONFIGURADO"])
         cached_quote = await self.redis.get(f"quote:{asset}")
@@ -60,9 +55,25 @@ class AnalysisService:
             session.add(row)
             await session.commit()
         await self.redis.set(f"snapshot:{asset}", json.dumps({"id": row.id, "data": row.data}), ex=86400)
+        log.info("market_collected", asset=asset, snapshot_id=row.id, provider=snapshot.quote.provider if snapshot.quote else "Kraken",
+                 candles={tf: len(rows) for tf, rows in snapshot.candles.items()}, quote_available=snapshot.quote is not None,
+                 issues=snapshot.integrity_issues(self.config.stale_after_seconds))
         return row.id, snapshot
 
+    async def latest_context(self, asset):
+        async with Session() as session:
+            row = await session.scalar(select(MarketSnapshot).where(MarketSnapshot.asset == asset)
+                                       .order_by(MarketSnapshot.created_at.desc()).limit(1))
+            if row:
+                snapshot = Snapshot.model_validate(row.data)
+                age = (utcnow()-snapshot.captured_at).total_seconds()
+                if 0 <= age <= self.config.stale_after_seconds:
+                    return row.id, snapshot
+        return await self.collect(asset)
+
     async def run(self, asset, actor="worker", replay_id=None):
+        if asset not in ACTIVE_ASSETS:
+            raise ValueError("Somente BTC/USD está habilitado")
         # One global lock serializes budgets across API, worker and replays.
         async with self.redis.lock("jarvis:analysis", timeout=300, blocking_timeout=1):
             mode = "BACKTEST" if replay_id else "EXPERIMENTAL"
@@ -73,7 +84,7 @@ class AnalysisService:
                         raise ValueError("Snapshot não encontrado para este ativo")
                     snapshot_id, snapshot = snapshot_row.id, Snapshot.model_validate(snapshot_row.data)
             else:
-                snapshot_id, snapshot = await self.collect(asset)
+                snapshot_id, snapshot = await self.latest_context(asset)
             issues = snapshot.integrity_issues(self.config.stale_after_seconds)
             metadata = dict(input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0)
             model = "integrity-gate"
@@ -118,6 +129,8 @@ class AnalysisService:
                 if mode == "EXPERIMENTAL":
                     await self.update_alerts(session, asset, result, snapshot, record.id)
                 await session.commit()
+            log.info("analysis_recorded", asset=asset, analysis_id=record.id, decision=result.decision,
+                     model=model, mode=mode, cost_usd=record.cost_usd)
             return record
 
     async def update_alerts(self, session, asset, result, snapshot, analysis_id):

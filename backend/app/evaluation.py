@@ -23,7 +23,7 @@ def evaluate_direction(analysis, start: Snapshot, end: Snapshot, horizon_minutes
 
 
 async def evaluate_pending(session, horizon):
-    records = (await session.scalars(select(AnalysisRecord).where(AnalysisRecord.decision.in_([Decision.BULL, Decision.BEAR])).order_by(AnalysisRecord.created_at).limit(1000))).all()
+    records = (await session.scalars(select(AnalysisRecord).where(AnalysisRecord.asset == "BTC/USD", AnalysisRecord.decision.in_([Decision.BULL, Decision.BEAR])).order_by(AnalysisRecord.created_at).limit(1000))).all()
     for row in records:
         if await session.scalar(select(Evaluation).where(Evaluation.analysis_id == row.id)):
             continue

@@ -15,7 +15,7 @@ from .claude import ClaudeUnavailable, InvalidClaudeResponse
 from .config import settings
 from .db import Alert, AnalysisRecord, Audit, Delivery, Evaluation, MarketSnapshot, PaperTrade, Session, User, engine, init_db
 from .evaluation import evaluate_pending
-from .schemas import Asset, Decision, Snapshot, utcnow
+from .schemas import ACTIVE_ASSETS, Asset, Decision, Snapshot, utcnow
 from .service import AnalysisService, serialize
 from .telegram import allowed_chats, enqueue
 
@@ -134,8 +134,8 @@ async def config(request: Request, user=Depends(current_user)):
     cfg = settings()
     claude_state = "PAUSADO" if not cfg.claude_enabled else ("CONFIGURADO" if cfg.claude_ready else "NÃO CONFIGURADO")
     return {"claude": claude_state, "claude_model": cfg.claude_model, "claude_pause_reason": cfg.claude_pause_reason,
-            "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "oanda": "CONFIGURADO" if cfg.oanda_ready else "NÃO CONFIGURADO",
-            "macro": "CONFIGURADO" if cfg.fred_api_key.get_secret_value() else "NÃO CONFIGURADO",
+            "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "assets": list(ACTIVE_ASSETS),
+            "market_refresh_seconds": cfg.market_refresh_seconds,
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",
             "analysis_interval_seconds": cfg.analysis_interval_seconds, "daily_budget_usd": cfg.daily_ai_budget_usd,
             "stale_after_seconds": cfg.stale_after_seconds, "worker": "ONLINE" if await request.app.state.redis.get("worker:heartbeat") else "OFFLINE",
@@ -146,7 +146,7 @@ async def config(request: Request, user=Depends(current_user)):
 async def markets(request: Request, user=Depends(current_user)):
     result = []
     async with Session() as session:
-        for asset in ("BTC/USD", "XAU/USD"):
+        for asset in ACTIVE_ASSETS:
             row = await session.scalar(select(MarketSnapshot).where(MarketSnapshot.asset == asset).order_by(MarketSnapshot.created_at.desc()).limit(1))
             data = Snapshot.model_validate(row.data) if row else None
             issues = data.integrity_issues(settings().stale_after_seconds) if data else ["SEM DADOS"]
@@ -162,7 +162,7 @@ async def markets(request: Request, user=Depends(current_user)):
 @app.get("/analyses")
 async def analyses(asset: Asset | None = None, user=Depends(current_user)):
     async with Session() as session:
-        query = select(AnalysisRecord).order_by(AnalysisRecord.created_at.desc()).limit(100)
+        query = select(AnalysisRecord).where(AnalysisRecord.asset.in_(ACTIVE_ASSETS)).order_by(AnalysisRecord.created_at.desc()).limit(100)
         if asset:
             query = query.where(AnalysisRecord.asset == asset)
         return [serialize(r) for r in (await session.scalars(query)).all()]
@@ -183,7 +183,7 @@ async def run(body: RunRequest, request: Request, user=Depends(admin)):
 @app.get("/alerts")
 async def alerts(user=Depends(current_user)):
     async with Session() as session:
-        return [serialize(r) for r in (await session.scalars(select(Alert).order_by(Alert.created_at.desc()).limit(100))).all()]
+        return [serialize(r) for r in (await session.scalars(select(Alert).where(Alert.asset.in_(ACTIVE_ASSETS)).order_by(Alert.created_at.desc()).limit(100))).all()]
 
 
 @app.get("/deliveries")
@@ -196,7 +196,7 @@ async def deliveries(user=Depends(admin)):
 @app.get("/snapshots")
 async def snapshots(user=Depends(current_user)):
     async with Session() as session:
-        rows = (await session.scalars(select(MarketSnapshot).order_by(MarketSnapshot.created_at.desc()).limit(100))).all()
+        rows = (await session.scalars(select(MarketSnapshot).where(MarketSnapshot.asset.in_(ACTIVE_ASSETS)).order_by(MarketSnapshot.created_at.desc()).limit(100))).all()
         return [{"id": r.id, "asset": r.asset, "created_at": r.created_at.isoformat()} for r in rows]
 
 
@@ -204,7 +204,7 @@ async def snapshots(user=Depends(current_user)):
 async def snapshot_detail(snapshot_id: str, user=Depends(current_user)):
     async with Session() as session:
         row = await session.get(MarketSnapshot, snapshot_id)
-        if not row:
+        if not row or row.asset not in ACTIVE_ASSETS:
             raise HTTPException(404, "Snapshot não encontrado")
         return serialize(row)
 
@@ -234,7 +234,7 @@ class PaperRequest(BaseModel):
 async def paper(body: PaperRequest, user=Depends(admin)):
     async with Session() as session:
         record = await session.get(AnalysisRecord, body.analysis_id)
-        if not record or record.decision not in (Decision.BULL, Decision.BEAR) or record.mode != "EXPERIMENTAL":
+        if not record or record.asset not in ACTIVE_ASSETS or record.decision not in (Decision.BULL, Decision.BEAR) or record.mode != "EXPERIMENTAL":
             raise HTTPException(422, "Selecione uma análise direcional experimental")
         snapshot_row = await session.get(MarketSnapshot, record.snapshot_id)
         snapshot = Snapshot.model_validate(snapshot_row.data)
@@ -255,7 +255,7 @@ async def paper(body: PaperRequest, user=Depends(admin)):
 @app.get("/paper")
 async def paper_history(user=Depends(current_user)):
     async with Session() as session:
-        return [serialize(r) for r in (await session.scalars(select(PaperTrade).order_by(PaperTrade.created_at.desc()).limit(100))).all()]
+        return [serialize(r) for r in (await session.scalars(select(PaperTrade).where(PaperTrade.data["asset"].as_string() == "BTC/USD").order_by(PaperTrade.created_at.desc()).limit(100))).all()]
 
 
 @app.post("/evaluations")
@@ -273,9 +273,9 @@ async def metrics(user=Depends(current_user)):
         budget_reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= utcnow().replace(hour=0, minute=0, second=0, microsecond=0)))
         alerts_count = await session.scalar(select(func.count(Alert.id)))
         invalidated = await session.scalar(select(func.count(Alert.id)).where(Alert.state == "INVALIDADO"))
-        evaluated = (await session.scalars(select(Evaluation))).all()
+        evaluated = (await session.scalars(select(Evaluation).where(Evaluation.asset.in_(ACTIVE_ASSETS)))).all()
         groups = []
-        for asset in ("BTC/USD", "XAU/USD"):
+        for asset in ACTIVE_ASSETS:
             for mode in ("EXPERIMENTAL", "BACKTEST"):
                 rows = [r for r in evaluated if r.asset == asset and r.data["mode"] == mode]
                 groups.append({"asset": asset, "timeframe": "M1", "mode": mode, "samples": len(rows),
@@ -289,7 +289,7 @@ async def metrics(user=Depends(current_user)):
 async def summary(user=Depends(admin)):
     async with Session() as session:
         rows = []
-        for asset in ("BTC/USD", "XAU/USD"):
+        for asset in ACTIVE_ASSETS:
             row = await session.scalar(select(AnalysisRecord).where(AnalysisRecord.asset == asset, AnalysisRecord.mode == "EXPERIMENTAL").order_by(AnalysisRecord.created_at.desc()).limit(1))
             if row:
                 rows.append(row)
