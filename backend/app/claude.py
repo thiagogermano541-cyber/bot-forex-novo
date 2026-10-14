@@ -2,6 +2,7 @@ import json
 import time
 
 from anthropic import AsyncAnthropic
+from pydantic import ValidationError
 
 from .config import Settings
 from .schemas import Analysis, Snapshot
@@ -65,15 +66,20 @@ class ClaudeClient:
         try:
             blocks = [b for b in response.content if b.type == "tool_use" and b.name == "submit_analysis"]
             if response.stop_reason != "tool_use" or len(blocks) != 1:
-                raise ValueError("Incomplete or inconsistent Claude response")
+                raise ValueError(f"Resposta incompleta: {response.stop_reason}; blocos estruturados: {len(blocks)}")
             analysis = Analysis.model_validate(blocks[0].input).validate_grounding(supplied)
         except ValueError as exc:
             # Usage must still be accounted even if output cannot be trusted.
-            raise InvalidClaudeResponse(metadata) from exc
+            if isinstance(exc, ValidationError):
+                reason = "; ".join(f"{e['loc']}: {e['msg']}" for e in exc.errors(include_input=False)[:6])
+            else:
+                reason = str(exc)
+            raise InvalidClaudeResponse(metadata, reason=reason) from exc
         return analysis, metadata
 
 
 class InvalidClaudeResponse(Exception):
-    def __init__(self, usage):
+    def __init__(self, usage, reason=""):
         self.usage = usage
+        self.reason = reason
         super().__init__("Claude retornou JSON inválido ou evidências inconsistentes")

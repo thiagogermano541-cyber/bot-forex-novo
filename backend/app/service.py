@@ -116,7 +116,9 @@ class AnalysisService:
                     try:
                         result, metadata = await self.claude.analyze(snapshot, memory)
                     except InvalidClaudeResponse as exc:
-                        session.add(Audit(action="CLAUDE_INVALID", actor=actor, details={"snapshot_id": snapshot_id, **exc.usage}))
+                        log.warning("claude_response_rejected", asset=asset, reason=exc.reason,
+                                    input_tokens=exc.usage["input_tokens"], output_tokens=exc.usage["output_tokens"])
+                        session.add(Audit(action="CLAUDE_INVALID", actor=actor, details={"snapshot_id": snapshot_id, "reason": exc.reason, **exc.usage}))
                         await session.commit()
                         raise
                     reservation.details = {**reservation.details, "status": "COMPLETE", "known_cost_usd": metadata["cost_usd"]}
@@ -134,7 +136,7 @@ class AnalysisService:
             return record
 
     async def update_alerts(self, session, asset, result, snapshot, analysis_id):
-        if snapshot.integrity_issues(self.config.stale_after_seconds):
+        if snapshot.integrity_issues(self.config.stale_after_seconds) or (utcnow()-snapshot.captured_at).total_seconds() > self.config.stale_after_seconds:
             return
         midpoint = (snapshot.quote.bid + snapshot.quote.ask) / 2
         open_alerts = (await session.scalars(select(Alert).where(Alert.asset == asset,
