@@ -40,7 +40,8 @@ export function FinalVerdict({analysis, market, processing, freshnessSeconds = 3
 
 
 const usd = (value:number) => new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(value);
-export function PlanDetails({analysis}:{analysis:Analysis}) {
+export function PlanDetails({analysis}:{analysis?:Analysis}) {
+  if (!analysis) return null;
   const plan = analysis.data.trade_plan;
   const ref = analysis.data.market_reference;
   if (!plan) return null;
