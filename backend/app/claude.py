@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .schemas import Analysis, Snapshot
+from .structured_schema import analysis_tool_schema
 
 log = structlog.get_logger()
 
@@ -85,12 +86,8 @@ class ClaudeClient:
                                          for scenario in row.get("scenarios", [])]} for row in memory]
         payload = json.dumps({"market_data": context, "previous_analyses": previous}, ensure_ascii=False, separators=(",", ":"))
         messages = [{"role": "user", "content": payload}]
-        schema = Analysis.model_json_schema()
-        schema["$defs"]["SourceReference"] = {"type": "string", "enum": sorted(supplied.evidence_ids())}
-        for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids")):
-            schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
         tool = {"name": "submit_analysis", "description": "Retorna análise financeira estruturada, sem executar ações.",
-                "input_schema": schema}
+                "strict": True, "input_schema": analysis_tool_schema(supplied.evidence_ids())}
         log.info("claude_token_count_started", asset=snapshot.asset, model=self.config.claude_model)
         count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                         messages=messages, tools=[tool])

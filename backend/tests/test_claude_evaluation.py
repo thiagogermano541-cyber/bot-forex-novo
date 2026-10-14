@@ -28,6 +28,7 @@ async def test_claude_uses_official_contract_and_grounding(snapshot, wait_analys
     assert result.evidence[0].source_ids == [snapshot.candles["M1"][-1].id]
     assert usage["cost_usd"] == pytest.approx(0.0015)
     assert create.call_args.kwargs["tool_choice"]["name"] == "submit_analysis"
+    assert create.call_args.kwargs["tools"][0]["strict"] is True
     await client.client.close()
 
 
