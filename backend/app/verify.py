@@ -52,6 +52,7 @@ async def main():
             result.raise_for_status()
         await client.post(f"{origin}/api/auth/logout", headers={"Origin": origin}, json={})
         print(json.dumps({"event": "public_login_verified", "status": "PASS", "domain": origin,
+                          "claude_status": config.json().get("claude"),
                           "checks": ["dashboard", "readiness", "login", "secure_cookie", "permissions", "markets", "history", "alerts", "metrics", "no_exposed_secrets"]}), flush=True)
 
 

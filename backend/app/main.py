@@ -132,7 +132,8 @@ async def create_user(body: NewUser, actor=Depends(admin)):
 @app.get("/config")
 async def config(request: Request, user=Depends(current_user)):
     cfg = settings()
-    return {"claude": "CONFIGURADO" if cfg.claude_ready else "NÃO CONFIGURADO", "claude_model": cfg.claude_model,
+    claude_state = "PAUSADO" if not cfg.claude_enabled else ("CONFIGURADO" if cfg.claude_ready else "NÃO CONFIGURADO")
+    return {"claude": claude_state, "claude_model": cfg.claude_model, "claude_pause_reason": cfg.claude_pause_reason,
             "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "oanda": "CONFIGURADO" if cfg.oanda_ready else "NÃO CONFIGURADO",
             "macro": "CONFIGURADO" if cfg.fred_api_key.get_secret_value() else "NÃO CONFIGURADO",
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",

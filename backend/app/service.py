@@ -88,6 +88,8 @@ class AnalysisService:
                     result = insufficient(issues)
                 else:
                     if not self.config.claude_ready:
+                        if not self.config.claude_enabled:
+                            raise ClaudeUnavailable(f"Claude PAUSADO: {self.config.claude_pause_reason or 'Análises desativadas pelo operador'}")
                         raise ClaudeUnavailable("Claude NÃO CONFIGURADO: chave, modelo ou tarifas ausentes")
                     day = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                     reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= day))

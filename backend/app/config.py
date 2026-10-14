@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     admin_password: SecretStr = SecretStr("")
     cookie_secure: bool = False
     anthropic_api_key: SecretStr = SecretStr("")
+    claude_enabled: bool = True
+    claude_pause_reason: str = ""
     claude_model: str = ""
     claude_max_tokens: int = Field(default=3000, ge=1000, le=16000)
     claude_input_token_limit: int = Field(default=26000, ge=1000, le=100000)
@@ -44,7 +46,7 @@ class Settings(BaseSettings):
 
     @property
     def claude_ready(self):
-        return bool(self.anthropic_api_key.get_secret_value() and self.claude_model
+        return bool(self.claude_enabled and self.anthropic_api_key.get_secret_value() and self.claude_model
                     and self.claude_input_usd_per_million > 0 and self.claude_output_usd_per_million > 0)
 
     @property

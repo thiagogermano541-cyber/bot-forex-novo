@@ -67,6 +67,8 @@ docker compose down
 
 **Claude:** preencha `ANTHROPIC_API_KEY`, `CLAUDE_MODEL` com um ID disponível em sua conta e as tarifas oficiais do modelo em `CLAUDE_INPUT_USD_PER_MILLION` e `CLAUDE_OUTPUT_USD_PER_MILLION`. Sem tarifas positivas, o estado permanece NÃO CONFIGURADO. Ajuste orçamento, limite de tokens e intervalo. O SDK retorna JSON através de uma ferramenta de saída forçada; essa ferramenta não executa ações.
 
+`CLAUDE_ENABLED=false` pausa as análises sem interromper a coleta ou o login. `CLAUDE_PAUSE_REASON` explica o motivo no painel. Depois de resolver uma restrição da conta Anthropic, use `CLAUDE_ENABLED=true` no backend e no worker para reativar. A chave continua exclusivamente nas variáveis do servidor.
+
 **BTC/USD:** Kraken spot público: candles OHLCV, trades e profundidade local, REST para histórico e recuperação, WebSocket ticker para bid/ask. Não requer chave. Derivativos e liquidações não são fornecidos por esse conector e ficam explicitamente indisponíveis. Não confunda livro da Kraken com mercado global.
 
 **XAU/USD:** configure `OANDA_TOKEN`, `OANDA_ACCOUNT_ID` e `OANDA_ENVIRONMENT=practice` ou `live`. A conta precisa permitir consultas a `XAU_USD`; disponibilidade depende da região. O sistema só consulta dados, inclusive em ambiente live. Candles midpoint, bid/ask e tick volume; sem livro centralizado, volume real ou ordens institucionais presumidas. Streaming HTTP é a opção nativa da OANDA, não WebSocket.
