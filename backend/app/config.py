@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     telegram_chat_ids: str = ""
     telegram_enabled: bool = False
     evaluation_horizon_minutes: int = Field(default=60, ge=1, le=1440)
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def async_database_driver(cls, value):
+        # Railway provides a standard PostgreSQL URL; SQLAlchemy needs asyncpg.
+        if isinstance(value, str):
+            for prefix in ("postgres://", "postgresql://"):
+                if value.startswith(prefix):
+                    return "postgresql+asyncpg://" + value[len(prefix):]
+        return value
 
     @property
     def claude_ready(self):

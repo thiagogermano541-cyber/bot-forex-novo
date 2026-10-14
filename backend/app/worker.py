@@ -5,6 +5,7 @@ import random
 import httpx
 import structlog
 from redis.asyncio import Redis
+from sqlalchemy import text
 
 from .config import settings
 from .db import Session
@@ -47,6 +48,18 @@ async def heartbeat(redis):
 async def main():
     cfg = settings()
     redis = Redis.from_url(cfg.redis_url, decode_responses=True)
+    # Railway starts services independently. Wait for API-created schema and cache.
+    for attempt in range(36):
+        try:
+            await redis.ping()
+            async with Session() as session:
+                await session.execute(text("SELECT id FROM users LIMIT 1"))
+            break
+        except Exception as exc:
+            if attempt == 35:
+                raise RuntimeError("Database/cache/schema not ready for worker") from None
+            log.warning("worker_waiting_for_dependencies", error_type=type(exc).__name__)
+            await asyncio.sleep(5)
     async with httpx.AsyncClient(timeout=20) as client:
         service = AnalysisService(redis, client)
         tasks = [asyncio.create_task(heartbeat(redis))]

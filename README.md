@@ -33,6 +33,8 @@ jarvis-ai/
 
 ## Executar com Docker
 
+Para hospedar, consulte [deploy no Railway](docs/RAILWAY.md). O repositório inclui configs separados para API, worker e frontend, porta dinâmica, suporte IPv4/IPv6 e proxy da API em runtime. A publicação requer conexão autorizada à conta Railway.
+
 Requisitos: Docker Engine com Compose v2, acesso aos registries e APIs dos provedores. O dashboard e a documentação da API só são expostos em loopback.
 
 ```bash
@@ -97,7 +99,7 @@ npm install
 npm run dev
 ```
 
-O proxy `/api/*` do Next.js aponta para `http://localhost:8000` em desenvolvimento e `http://backend:8000` no build Docker. Nenhuma chave é `NEXT_PUBLIC_*`. Após a primeira instalação, preserve `package-lock.json` e use `npm ci` em builds reprodutíveis; esta entrega ainda não inclui lockfile gerado.
+O proxy server-side `/api/*` do Next.js aponta para `http://localhost:8000` em desenvolvimento e `http://backend:8000` no Docker. `BACKEND_URL` pode ser definido em runtime para a rede privada Railway. Nenhuma chave é `NEXT_PUBLIC_*`. Após a primeira instalação, preserve `package-lock.json` e use `npm ci` em builds reprodutíveis; esta entrega ainda não inclui lockfile gerado.
 
 ## Testes e verificação
 
