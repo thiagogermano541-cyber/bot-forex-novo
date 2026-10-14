@@ -8,6 +8,8 @@ from pydantic import ValidationError
 from .config import Settings
 from .schemas import Analysis, Snapshot
 from .structured_schema import analysis_tool_schema
+from .market_context import prepare_market
+from .schemas import TIMEFRAMES
 
 log = structlog.get_logger()
 MAX_ANALYSIS_ATTEMPTS = 2
@@ -23,6 +25,26 @@ Investigue máximas/mínimas, equal highs/lows, liquidez potencial, sweeps, BOS,
 order blocks potenciais, desequilíbrio, suportes/resistências, rejeições e falsos rompimentos.
 Só discuta absorção e pressão de ordens se observáveis em trades/livro, com limitações.
 Compare M1, M5, M15, M30, H1, H4; explicite conflitos. Não use padrão isolado como direção.
+H4/H1 definem o contexto, M30/M15 descrevem o setup, M5/M1 avaliam a confirmação.
+Reconheça operações contra o contexto maior; sem evidência suficiente, AGUARDAR.
+Os candles estão em tabelas columns/rows, com timestamps Unix em segundos UTC.
+observed_facts são estatísticas exatas da janela enviada, não um motor de sinais.
+Pondere o argumento contrário mais forte e explicite o evento observável que mudaria a decisão.
+Um wick isolado não confirma rompimento; confirme o fechamento e a reação subsequente.
+Livro pontual não comprova absorção, spoofing nem persistência de ordens. Não extrapole a exchange.
+Não persiga movimento fora da região de entrada. Distinga oportunidade potencial e confirmação atual.
+Ao propor trade_plan, forneça lado, setup, período, faixa de entrada, stop estrutural,
+alvos apoiados em regiões de candles citados, gatilho observável, prazo e condições de cancelamento.
+COMPRA/VENDA exige status CONFIRMADO, cotação de referência dentro da faixa de entrada,
+confirmação citando o último candle fechado do período escolhido e evidências OBSERVADO
+em pelo menos um período H1/H4 e um período menor. Stop igual à invalidação do cenário escolhido.
+Alvos de COMPRA devem subir acima da entrada; VENDA devem descer abaixo; sem alvos duplicados.
+Cada alvo deve estar dentro da máxima/mínima de algum candle citado por ele.
+Se o gatilho depende de evento futuro, use trade_plan PENDENTE e decisão AGUARDAR.
+Se não houver setup defensável, trade_plan=null. Nunca force um plano para preencher campos.
+Níveis de entrada/stop/alvos são propostas experimentais; não preços futuros conhecidos.
+O prazo valid_for_minutes deve ser 1 a 60, coerente com o período; não trate plano vencido como atual.
+Não use porcentagem de acerto ou confiança numérica. Risco/retorno é projetado e não assegura resultado.
 Avalie ALTA, BAIXA e LATERAL, confirmação e invalidação de cada cenário.
 AGUARDAR é uma decisão válida e preferível se não há confirmação suficiente.
 DADOS INSUFICIENTES se dados necessários faltam. Nenhuma direção com missing_data. Dados opcionais indisponíveis devem aparecer em risks;
@@ -35,7 +57,7 @@ Não garanta lucro. Todas as análises são experimentais até avaliação indep
 Compare a memória anterior com os dados atuais; fatos passados não são fatos atuais.
 Use exclusivamente a ferramenta submit_analysis, que apenas retorna JSON validado.
 Seja conciso. Summary até 80 palavras; justification até 120 palavras.
-No máximo 6 evidências, 4 zonas, 3 riscos e 3 condições por cenário.
+No máximo 6 evidências, 4 zonas, 3 riscos, 2 alvos e 3 condições por cenário.
 Cada timeframe_context até 35 palavras e cada tese até 60 palavras.
 Use até 3 IDs exatos por item. Registre somente padrões sustentados pelos dados;
 não preencha todos os tipos de padrão apenas para completar uma lista.
@@ -57,48 +79,32 @@ class ClaudeClient:
     async def analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         if not self.config.claude_ready:
             raise ClaudeUnavailable("Claude NÃO CONFIGURADO: configure chave, modelo e tarifas")
-        context = snapshot.model_dump(mode="json")
-        context["candles"] = {tf: [r.model_dump(mode="json") for r in rows[-30:]] for tf, rows in snapshot.candles.items()}
-        context["trades"] = context["trades"][-20:]
-        original_supplied = Snapshot.model_validate(context).model_copy(deep=True)
-        references = {}
-        for tf, rows in context["candles"].items():
-            for index, row in enumerate(rows, 1):
-                alias = f"{tf}_C{index:02d}"
-                references[alias] = row["id"]
-                row["id"] = alias
-        for index, row in enumerate(context["trades"], 1):
-            alias = f"TRADE_{index:02d}"
-            references[alias] = row["id"]
-            row["id"] = alias
-        if context["quote"]:
-            references["Q_CURRENT"] = context["quote"]["id"]
-            context["quote"]["id"] = "Q_CURRENT"
-        if context["order_book"]:
-            references["BOOK_CURRENT"] = context["order_book"]["id"]
-            context["order_book"]["id"] = "BOOK_CURRENT"
-        # Validate citations against exactly what was sent, rather than withheld history.
-        supplied = Snapshot.model_validate(context)
-        # Keep source IDs and every OHLCV number, but send repeated candle metadata
-        # once per timeframe instead of repeating it 180 times in the prompt.
-        metadata_by_tf = {}
-        for tf, rows in context["candles"].items():
-            if rows and len({(r["provider"], r["volume_kind"]) for r in rows}) == 1:
-                metadata_by_tf[tf] = {"provider": rows[0]["provider"], "volume_kind": rows[0]["volume_kind"]}
-                context["candles"][tf] = [{k: v for k, v in row.items() if k not in ("timeframe", "provider", "volume_kind")} for row in rows]
-        context["candle_metadata"] = metadata_by_tf
-        previous = [{**row, "scenarios": [{k: v for k, v in scenario.items() if k != "evidence_ids"}
-                                         for scenario in row.get("scenarios", [])]} for row in memory]
-        payload = json.dumps({"market_data": context, "previous_analyses": previous}, ensure_ascii=False, separators=(",", ":"))
-        messages = [{"role": "user", "content": payload}]
-        tool = {"name": "submit_analysis", "description": "Retorna análise financeira estruturada, sem executar ações.",
-                "strict": True, "input_schema": analysis_tool_schema(supplied.evidence_ids())}
-        start = time.monotonic()
-        metadata = dict(input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0)
-        for attempt in range(1, MAX_ANALYSIS_ATTEMPTS + 1):
-            log.info("claude_token_count_started", asset=snapshot.asset, model=self.config.claude_model, attempt=attempt)
+        # Start with the entire available window. Free token counting selects a
+        # smaller lossless context only when needed, preserving H1/H4 first.
+        history_options = [dict.fromkeys(TIMEFRAMES, 60),
+                           {tf: 60 if tf in ("H1", "H4") else 30 for tf in TIMEFRAMES},
+                           dict.fromkeys(TIMEFRAMES, 30)]
+        for limits in history_options:
+            prepared = prepare_market(snapshot, memory, limits)
+            messages = [{"role": "user", "content": json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":"))}]
+            tool = {"name": "submit_analysis", "description": "Retorna análise e plano experimental sustentados pelo snapshot.",
+                    "strict": True, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
             count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                             messages=messages, tools=[tool])
+            if count.input_tokens <= self.config.claude_input_token_limit - min(4096, self.config.claude_max_tokens):
+                break
+            log.info("claude_context_compacted", input_tokens=count.input_tokens, history_limits=limits)
+        supplied, original_supplied, references = prepared.supplied, prepared.original, prepared.references
+        log.info("claude_context_prepared", asset=snapshot.asset,
+                 candles={tf: len(rows) for tf, rows in supplied.candles.items()})
+        start = time.monotonic()
+        metadata = dict(input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0,
+                        context_candles={tf: len(rows) for tf, rows in supplied.candles.items()})
+        for attempt in range(1, MAX_ANALYSIS_ATTEMPTS + 1):
+            log.info("claude_token_count_started", asset=snapshot.asset, model=self.config.claude_model, attempt=attempt)
+            if attempt > 1:
+                count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
+                                                                messages=messages, tools=[tool])
             if count.input_tokens > self.config.claude_input_token_limit:
                 log.warning("claude_context_too_large", asset=snapshot.asset, input_tokens=count.input_tokens,
                             input_token_limit=self.config.claude_input_token_limit)
@@ -151,6 +157,10 @@ class ClaudeClient:
                     zone.source_ids = [references.get(ref, ref) for ref in zone.source_ids]
                 for scenario in analysis.scenarios:
                     scenario.evidence_ids = [references.get(ref, ref) for ref in scenario.evidence_ids]
+                if analysis.trade_plan:
+                    analysis.trade_plan.confirmation_source_ids = [references.get(ref, ref) for ref in analysis.trade_plan.confirmation_source_ids]
+                    for target in analysis.trade_plan.targets:
+                        target.source_ids = [references.get(ref, ref) for ref in target.source_ids]
                 validation_stage = "persisted_snapshot_references"
                 analysis.validate_grounding(original_supplied)
             except ValueError as exc:

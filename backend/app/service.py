@@ -1,7 +1,7 @@
 import hashlib
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 import structlog
@@ -96,7 +96,8 @@ class AnalysisService:
                          AnalysisRecord.created_at < cutoff, AnalysisRecord.mode == "EXPERIMENTAL")
                          .order_by(AnalysisRecord.created_at.desc()).limit(3))).all()
                 memory = [{"id": r.id, "at": r.created_at.isoformat(), "decision": r.decision,
-                           "summary": r.data["summary"], "scenarios": r.data["scenarios"]} for r in reversed(past)]
+                           "summary": r.data["summary"], "scenarios": r.data["scenarios"],
+                           "trade_plan": r.data.get("trade_plan")} for r in reversed(past)]
                 if issues:
                     result = insufficient(issues)
                 else:
@@ -115,8 +116,21 @@ class AnalysisService:
                         await session.commit()
                         raise
                     model = self.config.claude_model
+                result_data = result.model_dump(mode="json")
+                result_data["market_reference"] = {
+                    "data_cutoff_utc": snapshot.captured_at.isoformat(),
+                    "price": (snapshot.quote.bid + snapshot.quote.ask) / 2 if snapshot.quote else None,
+                    "valid_until": (snapshot.captured_at + timedelta(minutes=result.trade_plan.valid_for_minutes)).isoformat() if result.trade_plan else None,
+                    "context_candles": metadata.pop("context_candles", {}), "analysis_version": 2,
+                    "spread_usd": snapshot.quote.ask - snapshot.quote.bid if snapshot.quote else None,
+                }
+                if result.trade_plan:
+                    plan = result.trade_plan
+                    worst_entry = plan.entry_high if plan.side == "COMPRA" else plan.entry_low
+                    risk = abs(worst_entry - plan.stop_loss)
+                    result_data["market_reference"]["gross_risk_reward"] = [abs(target.price - worst_entry) / risk for target in plan.targets]
                 record = AnalysisRecord(snapshot_id=snapshot_id, asset=asset, decision=result.decision,
-                                        data=result.model_dump(mode="json"), mode=mode, model=model, **metadata)
+                                        data=result_data, mode=mode, model=model, **metadata)
                 session.add(record)
                 await session.flush()
                 session.add(Audit(action="ANALYSIS", actor=actor, details={"analysis_id": record.id, "snapshot_id": snapshot_id, "mode": mode}))
@@ -132,8 +146,12 @@ class AnalysisService:
             return
         midpoint = (snapshot.quote.bid + snapshot.quote.ask) / 2
         open_alerts = (await session.scalars(select(Alert).where(Alert.asset == asset,
-                       Alert.state == "PENDENTE DE CONFIRMAÇÃO"))).all()
+                       Alert.state.in_(["PENDENTE DE CONFIRMAÇÃO", "CONFIRMADO"])))).all()
         for alert in open_alerts:
+            if alert.data.get("valid_until") and datetime.fromisoformat(alert.data["valid_until"]) <= utcnow():
+                alert.state = "EXPIRADO"
+                await enqueue(session, self.config, f"expire:{alert.id}", f"JARVIS • {asset}\nPlano EXPIRADO. Solicite uma nova análise.\nAnálise: {alert.analysis_id}")
+                continue
             invalid = alert.data["invalidation_price"]
             crossed = midpoint <= invalid if alert.data["direction"] == "ALTA" else midpoint >= invalid
             if crossed:
@@ -144,24 +162,40 @@ class AnalysisService:
                               f"JARVIS • {asset}\nAtualização: AGUARDAR.\n{result.summary}\nAnálise: {analysis_id}")
         if result.decision not in (Decision.BULL, Decision.BEAR):
             return
+        plan = result.trade_plan
+        if not plan or snapshot.captured_at + timedelta(minutes=plan.valid_for_minutes) <= utcnow():
+            return
+        current = await self.redis.get(f"quote:{asset}")
+        if current:
+            quote = Quote.model_validate_json(current)
+            age = (utcnow() - quote.timestamp).total_seconds()
+            if age < 0 or age > self.config.stale_after_seconds:
+                return
+            midpoint = (quote.bid + quote.ask) / 2
+        if not plan.entry_low <= midpoint <= plan.entry_high:
+            return
         direction = "ALTA" if result.decision == Decision.BULL else "BAIXA"
         scenario = next(s for s in result.scenarios if s.direction == direction)
         fingerprint = hashlib.sha256(json.dumps({"asset": asset, "direction": direction,
                        "zones": [[z.low, z.high] for z in result.zones], "invalid": scenario.invalidation_price}, sort_keys=True).encode()).hexdigest()
-        if any(a.data.get("fingerprint") == fingerprint for a in open_alerts if a.state != "INVALIDADO"):
+        if any(a.data.get("fingerprint") == fingerprint for a in open_alerts if a.state not in ("INVALIDADO", "EXPIRADO")):
             return
         data = dict(verdict="COMPRA" if direction == "ALTA" else "VENDA", direction=direction, reference_price=midpoint, zones=[z.model_dump() for z in result.zones],
                     evidence=[e.model_dump() for e in result.evidence], confirmation=scenario.confirmation,
                     invalidation=scenario.invalidation, invalidation_price=scenario.invalidation_price,
-                    risks=result.risks, fingerprint=fingerprint, evaluation="EXPERIMENTAL")
-        alert = Alert(analysis_id=analysis_id, asset=asset, data=data)
+                    risks=result.risks, fingerprint=fingerprint, evaluation="EXPERIMENTAL",
+                    trade_plan=plan.model_dump(mode="json"),
+                    valid_until=(snapshot.captured_at + timedelta(minutes=plan.valid_for_minutes)).isoformat())
+        alert = Alert(analysis_id=analysis_id, asset=asset, data=data, state="CONFIRMADO")
         session.add(alert)
         await session.flush()
         text = (f"JARVIS • {asset} • Veredito final: {data['verdict']}\nCenário: {direction}\nUTC: {utcnow().isoformat()}\nReferência: {midpoint}\n"
                 f"Regiões: {', '.join(f'{z.low}–{z.high}' for z in result.zones)}\n"
                 f"Evidências: {'; '.join(e.description for e in result.evidence)}\n"
                 f"Confirmação: {'; '.join(scenario.confirmation)}\nInvalidação: {scenario.invalidation_price} — {scenario.invalidation}\n"
-                f"Riscos: {'; '.join(result.risks)}\nEstado: PENDENTE DE CONFIRMAÇÃO\nAnálise: {analysis_id}\nExperimental; sem execução automática.")
+                f"Entrada: {plan.entry_low}–{plan.entry_high}\nAlvos propostos: {', '.join(str(t.price) for t in plan.targets)}\n"
+                f"Validade UTC: {data['valid_until']}\n"
+                f"Riscos: {'; '.join(result.risks)}\nEstado: CONFIRMADO no snapshot; reavalie cotação e validade.\nAnálise: {analysis_id}\nExperimental; sem execução automática.")
         await enqueue(session, self.config, f"alert:{alert.id}", text)
 
 

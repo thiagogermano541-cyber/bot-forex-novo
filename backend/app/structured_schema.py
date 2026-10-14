@@ -19,7 +19,8 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
         "additionalProperties": False,
     }
     schema["$defs"]["SourceReference"] = {"type": "string", "enum": sorted(source_ids)}
-    for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids")):
+    for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids"),
+                        ("SignalTarget", "source_ids"), ("TradePlan", "confirmation_source_ids")):
         schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
 
     def transform(node):

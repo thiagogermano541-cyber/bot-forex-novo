@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.claude import ClaudeClient, InvalidClaudeResponse
+from app.claude import ClaudeClient, InvalidClaudeResponse, ClaudeUnavailable
 from app.config import Settings
 from app.evaluation import evaluate_direction
 from app.schemas import Snapshot
@@ -95,3 +95,42 @@ def test_replay_rejects_future_macro(snapshot):
     data["macro"] = [{"id": "test:fred", "observation_date": "2026-10-15", "vintage": "2026-10-15", "value": 1}]
     with pytest.raises(ValueError, match="Future macro"):
         Snapshot.model_validate(data)
+
+
+async def test_confirmed_plan_keeps_original_provider_references(snapshot, confirmed_buy):
+    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+                           claude_input_usd_per_million=1, claude_output_usd_per_million=5))
+    aliases = {c.id: f"{tf}_C{index:02d}" for tf, rows in snapshot.candles.items()
+               for index, c in enumerate(rows, 1)}
+    raw = confirmed_buy.model_dump(mode="json")
+    for evidence in raw["evidence"]:
+        evidence["source_ids"] = [aliases[i] for i in evidence["source_ids"]]
+    for zone in raw["zones"]:
+        zone["source_ids"] = [aliases[i] for i in zone["source_ids"]]
+    for scenario in raw["scenarios"]:
+        scenario["evidence_ids"] = [aliases[i] for i in scenario["evidence_ids"]]
+    raw["trade_plan"]["confirmation_source_ids"] = ["M1_C30"]
+    raw["trade_plan"]["targets"][0]["source_ids"] = ["H1_C30"]
+    client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
+    client.client.messages.create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use",
+        usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
+        content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=raw)]))
+    result, metadata = await client.analyze(snapshot, [])
+    assert result.trade_plan.confirmation_source_ids == [snapshot.candles["M1"][-1].id]
+    assert result.trade_plan.targets[0].source_ids == [snapshot.candles["H1"][-1].id]
+    assert metadata["context_candles"] == dict.fromkeys(snapshot.candles, 30)
+    await client.client.close()
+
+
+async def test_oversized_context_never_sends_a_paid_analysis(snapshot):
+    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+                           claude_input_usd_per_million=1, claude_output_usd_per_million=5))
+    client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=30000))
+    client.client.messages.create = AsyncMock()
+    budget = SimpleNamespace(reserve=AsyncMock(), settle=AsyncMock())
+    with pytest.raises(ClaudeUnavailable, match="limite de tokens"):
+        await client.analyze(snapshot, [], budget=budget)
+    client.client.messages.create.assert_not_awaited()
+    budget.reserve.assert_not_awaited()
+    assert client.client.messages.count_tokens.call_count == 3
+    await client.client.close()

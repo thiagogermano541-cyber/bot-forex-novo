@@ -41,3 +41,21 @@ def wait_analysis(snapshot):
                        "invalidation_price": None, "evidence_ids": [source]} for d in ("ALTA", "BAIXA", "LATERAL")],
                     timeframe_context={tf: "Estrutura aguardando confirmação." for tf in TIMEFRAMES},
                     conflicts=[], risks=["Teste não representa resultado real."], missing_data=[], change_from_previous="Primeira análise.")
+
+
+@pytest.fixture
+def confirmed_buy(snapshot, wait_analysis):
+    from app.schemas import Evidence, TradePlan, Zone
+    analysis = wait_analysis.model_copy(deep=True)
+    analysis.decision = "CENÁRIO DE ALTA"
+    source = snapshot.candles["M1"][-1].id
+    higher = snapshot.candles["H1"][-1].id
+    analysis.evidence.append(Evidence(category="OBSERVADO", description="Região observada no período maior.", source_ids=[higher]))
+    analysis.zones = [Zone(kind="COMPRADORES", low=100, high=101, explanation="Região observada de teste.", source_ids=[source])]
+    analysis.scenarios[0].invalidation_price = 99
+    analysis.trade_plan = TradePlan(side="COMPRA", status="CONFIRMADO", setup_type="Reteste da região observada",
+        timeframe="M1", entry_low=100, entry_high=101, stop_loss=99,
+        confirmation="Fechamento recente citado, observado na região.", confirmation_source_ids=[source],
+        targets=[{"price": 102, "rationale": "Máxima na região de um candle observado.", "source_ids": [higher]}],
+        valid_for_minutes=10, cancel_if=["Perda da região de invalidação."])
+    return analysis

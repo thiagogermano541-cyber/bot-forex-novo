@@ -139,3 +139,11 @@ Chamadas POST fora do navegador precisam do header `Origin: http://localhost:300
 `provedores → snapshot fechado + UTC → gate de integridade → contexto + memória → Claude → schema + grounding → auditoria → alertas/outbox → dashboard → avaliação posterior`
 
 O gate do backend só pode interromper com DADOS INSUFICIENTES. As decisões CENÁRIO DE ALTA, CENÁRIO DE BAIXA e AGUARDAR são do Claude. Sem Claude configurado, o sistema não simula análises de IA.
+
+### Análises v2 e qualidade dos sinais
+
+A IA recebe até 60 candles fechados por período em formato tabular sem perda de OHLCV, preços e timestamps UTC. A contagem de tokens escolhe uma janela menor quando necessário, priorizando H1/H4; os períodos efetivamente enviados ficam registrados na análise. O backend calcula somente fatos observáveis da janela (extremos, volumes separados e spread), sem escolher a direção. Claude compara contexto, setup, execução e o argumento contrário antes do veredito.
+
+Novos planos incluem entrada, stop estrutural, alvos apoiados em candles citados, confirmação, prazo e cancelamento. Uma direção exige plano confirmado, evidência observada em um período maior e um menor, confirmação no último candle fechado do período escolhido, referência dentro da entrada e níveis coerentes. Setups pendentes retornam AGUARDAR. O risco/retorno exibido é bruto e projetado, com entrada conservadora; não inclui taxas ou slippage. O painel distingue veredito salvo de plano vencido ou cotação fora da entrada. O histórico antigo permanece disponível.
+
+As mudanças melhoram o contexto e a verificabilidade, não demonstram aumento de precisão. As análises continuam experimentais e exclusivamente sob demanda; abrir o painel, atualizar cotações e fazer deploy não dispara inferência. A avaliação histórica existente mede direção do preço, não execução dos novos planos.
