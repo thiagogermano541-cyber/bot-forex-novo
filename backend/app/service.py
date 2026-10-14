@@ -1,14 +1,15 @@
 import hashlib
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse, MAX_ANALYSIS_ATTEMPTS
+from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse
+from .budget import BudgetLedger
 from .config import settings
 from .db import Alert, AnalysisRecord, Audit, MarketSnapshot, Session
 from .providers.kraken import Kraken
@@ -103,29 +104,16 @@ class AnalysisService:
                         if not self.config.claude_enabled:
                             raise ClaudeUnavailable(f"Claude PAUSADO: {self.config.claude_pause_reason or 'Análises desativadas pelo operador'}")
                         raise ClaudeUnavailable("Claude NÃO CONFIGURADO: chave, modelo ou tarifas ausentes")
-                    day = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-                    reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= day))
-                    worst = (self.config.claude_input_token_limit * self.config.claude_input_usd_per_million
-                             + self.config.claude_max_tokens * self.config.claude_output_usd_per_million) / 1_000_000
-                    if reserved + worst * MAX_ANALYSIS_ATTEMPTS > self.config.daily_ai_budget_usd:
-                        raise ClaudeUnavailable("Orçamento diário insuficiente para uma chamada com revisão")
-                    # Persist a conservative ceiling before external I/O. Unknown timeout usage
-                    # remains charged against the daily quota, never reported as actual spend.
-                    reservation = Audit(action="AI_BUDGET", actor=actor, details={"snapshot_id": snapshot_id, "reserved_usd": worst*MAX_ANALYSIS_ATTEMPTS, "status": "RESERVED"})
-                    session.add(reservation)
-                    await session.commit()
+                    budget = BudgetLedger(session, self.config, actor, snapshot_id)
                     try:
                         async with asyncio.timeout(270):
-                            result, metadata = await self.claude.analyze(snapshot, memory)
+                            result, metadata = await self.claude.analyze(snapshot, memory, budget=budget)
                     except InvalidClaudeResponse as exc:
                         log.warning("claude_response_rejected", asset=asset, reason=exc.reason,
                                     input_tokens=exc.usage["input_tokens"], output_tokens=exc.usage["output_tokens"])
-                        reservation.details = {**reservation.details, "status": "REJECTED",
-                                               "reserved_usd": exc.usage["cost_usd"], "known_cost_usd": exc.usage["cost_usd"]}
                         session.add(Audit(action="CLAUDE_INVALID", actor=actor, details={"snapshot_id": snapshot_id, "reason": exc.reason, **exc.usage}))
                         await session.commit()
                         raise
-                    reservation.details = {**reservation.details, "status": "COMPLETE", "reserved_usd": metadata["cost_usd"], "known_cost_usd": metadata["cost_usd"]}
                     model = self.config.claude_model
                 record = AnalysisRecord(snapshot_id=snapshot_id, asset=asset, decision=result.decision,
                                         data=result.model_dump(mode="json"), mode=mode, model=model, **metadata)
@@ -162,14 +150,14 @@ class AnalysisService:
                        "zones": [[z.low, z.high] for z in result.zones], "invalid": scenario.invalidation_price}, sort_keys=True).encode()).hexdigest()
         if any(a.data.get("fingerprint") == fingerprint for a in open_alerts if a.state != "INVALIDADO"):
             return
-        data = dict(direction=direction, reference_price=midpoint, zones=[z.model_dump() for z in result.zones],
+        data = dict(verdict="COMPRA" if direction == "ALTA" else "VENDA", direction=direction, reference_price=midpoint, zones=[z.model_dump() for z in result.zones],
                     evidence=[e.model_dump() for e in result.evidence], confirmation=scenario.confirmation,
                     invalidation=scenario.invalidation, invalidation_price=scenario.invalidation_price,
                     risks=result.risks, fingerprint=fingerprint, evaluation="EXPERIMENTAL")
         alert = Alert(analysis_id=analysis_id, asset=asset, data=data)
         session.add(alert)
         await session.flush()
-        text = (f"JARVIS • {asset} • {direction}\nUTC: {utcnow().isoformat()}\nReferência: {midpoint}\n"
+        text = (f"JARVIS • {asset} • Veredito final: {data['verdict']}\nCenário: {direction}\nUTC: {utcnow().isoformat()}\nReferência: {midpoint}\n"
                 f"Regiões: {', '.join(f'{z.low}–{z.high}' for z in result.zones)}\n"
                 f"Evidências: {'; '.join(e.description for e in result.evidence)}\n"
                 f"Confirmação: {'; '.join(scenario.confirmation)}\nInvalidação: {scenario.invalidation_price} — {scenario.invalidation}\n"
@@ -178,5 +166,9 @@ class AnalysisService:
 
 
 def serialize(record):
-    return {c.name: (v.isoformat() if isinstance(v, datetime) else v)
+    data = {c.name: (v.isoformat() if isinstance(v, datetime) else v)
             for c in record.__table__.columns if (v := getattr(record, c.name)) is not None}
+
+    if isinstance(record, AnalysisRecord):
+        data["verdict"] = {Decision.BULL: "COMPRA", Decision.BEAR: "VENDA"}.get(record.decision, "AGUARDAR")
+    return data

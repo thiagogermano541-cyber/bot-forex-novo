@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     claude_input_usd_per_million: float = Field(default=0, ge=0, allow_inf_nan=False)
     claude_output_usd_per_million: float = Field(default=0, ge=0, allow_inf_nan=False)
     daily_ai_budget_usd: float = Field(default=5, ge=0, allow_inf_nan=False)
+    daily_ai_budget_enabled: bool = False
+    analysis_on_demand_only: bool = True
     analysis_interval_seconds: int = Field(default=300, ge=60)
     stale_after_seconds: int = Field(default=90, ge=10, le=600)
     market_refresh_seconds: int = Field(default=30, ge=15, le=120)
@@ -50,6 +52,11 @@ class Settings(BaseSettings):
     def claude_ready(self):
         return bool(self.claude_enabled and self.anthropic_api_key.get_secret_value() and self.claude_model
                     and self.claude_input_usd_per_million > 0 and self.claude_output_usd_per_million > 0)
+
+    @property
+    def enforce_daily_budget(self):
+        # Automatic operation always requires a daily spending limit.
+        return self.daily_ai_budget_enabled or not self.analysis_on_demand_only
 
     @property
     def oanda_ready(self):

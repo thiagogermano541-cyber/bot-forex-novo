@@ -68,13 +68,19 @@ async def main():
         denied = await client.post(f"{origin}/api/analyses", headers={"Origin": origin}, json={"asset": "XAU/USD"})
         if denied.status_code != 422:
             raise RuntimeError("Non-BTC analysis was not rejected")
+        latest_verdict = None
         for path in ("analyses", "alerts", "metrics"):
             result = await client.get(f"{origin}/api/{path}")
             result.raise_for_status()
+            if path == "analyses" and result.json():
+                latest_verdict = result.json()[0].get("verdict")
+        if config.json().get("analysis_mode") != "MANUAL" or config.json().get("daily_budget_enabled") is not False:
+            raise RuntimeError("Expected on-demand analysis configuration")
         await client.post(f"{origin}/api/auth/logout", headers={"Origin": origin}, json={})
         print(json.dumps({"event": "public_login_verified", "status": "PASS", "domain": origin,
                           "claude_status": config.json().get("claude"),
-                          "btc_market": market_summary,
+                          "btc_market": market_summary, "analysis_mode": config.json().get("analysis_mode"),
+                          "daily_budget_enabled": config.json().get("daily_budget_enabled"), "latest_verdict": latest_verdict,
                           "checks": ["dashboard", "readiness", "login", "secure_cookie", "permissions", "markets", "history", "alerts", "metrics", "no_exposed_secrets"]}), flush=True)
 
 

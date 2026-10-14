@@ -54,7 +54,7 @@ class ClaudeClient:
         self.client = AsyncAnthropic(api_key=config.anthropic_api_key.get_secret_value() or "unconfigured",
                                      max_retries=0, timeout=120)
 
-    async def analyze(self, snapshot: Snapshot, memory: list[dict]):
+    async def analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         if not self.config.claude_ready:
             raise ClaudeUnavailable("Claude NÃO CONFIGURADO: configure chave, modelo e tarifas")
         context = snapshot.model_dump(mode="json")
@@ -105,19 +105,36 @@ class ClaudeClient:
                 if metadata["input_tokens"]:
                     raise InvalidClaudeResponse(metadata, reason="Revisão ultrapassa limite de tokens")
                 raise ClaudeUnavailable("Contexto ultrapassa limite de tokens")
+            if budget is not None:
+                try:
+                    await budget.reserve()
+                except ClaudeUnavailable as exc:
+                    if metadata["input_tokens"]:
+                        raise InvalidClaudeResponse(metadata, reason=str(exc)) from exc
+                    raise
             log.info("claude_request_started", asset=snapshot.asset, input_tokens=count.input_tokens,
                      max_output_tokens=self.config.claude_max_tokens, attempt=attempt)
-            response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
-                                                         messages=messages, tools=[tool],
-                                                         tool_choice={"type": "tool", "name": "submit_analysis"},
-                                                         max_tokens=self.config.claude_max_tokens)
+            try:
+                response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
+                                                             messages=messages, tools=[tool],
+                                                             tool_choice={"type": "tool", "name": "submit_analysis"},
+                                                             max_tokens=self.config.claude_max_tokens)
+            except Exception as exc:
+                # Rejected requests have no generated tokens. Network timeouts
+                # retain the reservation because provider usage is unknown.
+                if budget is not None and 400 <= getattr(exc, "status_code", 0) < 500 and getattr(exc, "status_code", 0) != 408:
+                    await budget.settle(0)
+                raise
             usage = response.usage
             log.info("claude_response_received", asset=snapshot.asset, stop_reason=response.stop_reason,
                      input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, attempt=attempt)
             metadata["input_tokens"] += usage.input_tokens
             metadata["output_tokens"] += usage.output_tokens
-            metadata["cost_usd"] += (usage.input_tokens * self.config.claude_input_usd_per_million
-                                    + usage.output_tokens * self.config.claude_output_usd_per_million) / 1_000_000
+            call_cost = (usage.input_tokens * self.config.claude_input_usd_per_million
+                         + usage.output_tokens * self.config.claude_output_usd_per_million) / 1_000_000
+            metadata["cost_usd"] += call_cost
+            if budget is not None:
+                await budget.settle(call_cost)
             metadata["latency_ms"] = int((time.monotonic()-start)*1000)
             blocks = [b for b in response.content if b.type == "tool_use" and b.name == "submit_analysis"]
             if response.stop_reason != "tool_use" or len(blocks) != 1:

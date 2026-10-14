@@ -66,7 +66,7 @@ async def collect_loop(service):
 async def analysis_loop(service):
     while True:
         delay = service.config.analysis_interval_seconds
-        if service.config.claude_ready:
+        if service.config.claude_ready and not service.config.analysis_on_demand_only:
             for asset in ACTIVE_ASSETS:
                 try:
                     await service.run(asset)
@@ -109,7 +109,8 @@ async def main():
         tasks = [asyncio.create_task(heartbeat(redis)), asyncio.create_task(collect_loop(service))]
         if cfg.kraken_enabled:
             tasks.append(asyncio.create_task(stream_loop(Kraken(client), "BTC/USD", redis)))
-        log.info("worker_started", assets=list(ACTIVE_ASSETS), claude_enabled=cfg.claude_ready)
+        log.info("worker_started", assets=list(ACTIVE_ASSETS), claude_enabled=cfg.claude_ready,
+                 analysis_mode="MANUAL" if cfg.analysis_on_demand_only else "AUTOMÁTICO")
         if cfg.verify_btc_on_start:
             from .diagnose_market import main as diagnose
             tasks.append(asyncio.create_task(diagnose()))
@@ -123,7 +124,8 @@ async def main():
                     if (utcnow()-snapshot.captured_at).total_seconds() <= cfg.stale_after_seconds:
                         break
                 await asyncio.sleep(2)
-            tasks.append(asyncio.create_task(analysis_loop(service)))
+            if not cfg.analysis_on_demand_only:
+                tasks.append(asyncio.create_task(analysis_loop(service)))
             if cfg.verify_btc_on_start:
                 tasks.append(asyncio.create_task(verify_public_once()))
             while True:

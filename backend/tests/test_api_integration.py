@@ -24,6 +24,8 @@ async def test_auth_integrity_and_persistence(monkeypatch):
             assert "HttpOnly" in response.headers["set-cookie"]
             config = (await client.get("/config")).json()
             assert config["claude"] == "NÃO CONFIGURADO"
+            assert config["analysis_mode"] == "MANUAL"
+            assert config["daily_budget_enabled"] is False
             assert "anthropic_api_key" not in config
             assert (await client.post("/analyses", headers=origin, json={"asset": "ETH/USD"})).status_code == 422
             # Lock is only a test stand-in; production uses Redis distributed leases.
@@ -37,6 +39,7 @@ async def test_auth_integrity_and_persistence(monkeypatch):
             response = await client.post("/analyses", headers=origin, json={"asset": "BTC/USD"})
             assert response.status_code == 200
             assert response.json()["decision"] == "DADOS INSUFICIENTES"
+            assert response.json()["verdict"] == "AGUARDAR"
             assert response.json()["model"] == "integrity-gate"
             assert len((await client.get("/analyses")).json()) == 1
             assert (await client.get("/alerts")).json() == []

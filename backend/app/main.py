@@ -13,6 +13,7 @@ from sqlalchemy import func, select, text
 from .auth import DUMMY_HASH, admin, current_user, hasher, seed_admin, token_for
 from .claude import ClaudeUnavailable, InvalidClaudeResponse
 from .config import settings
+from .budget import reserved_today
 from .db import Alert, AnalysisRecord, Audit, Delivery, Evaluation, MarketSnapshot, PaperTrade, Session, User, engine, init_db
 from .evaluation import evaluate_pending
 from .schemas import ACTIVE_ASSETS, Asset, Decision, Snapshot, utcnow
@@ -136,6 +137,9 @@ async def config(request: Request, user=Depends(current_user)):
     return {"claude": claude_state, "claude_model": cfg.claude_model, "claude_pause_reason": cfg.claude_pause_reason,
             "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "assets": list(ACTIVE_ASSETS),
             "market_refresh_seconds": cfg.market_refresh_seconds,
+            "analysis_mode": "MANUAL" if cfg.analysis_on_demand_only else "AUTOMÁTICO",
+            "daily_budget_enabled": cfg.enforce_daily_budget,
+            "max_request_cost_usd": 2 * ((cfg.claude_input_token_limit + 256) * cfg.claude_input_usd_per_million + cfg.claude_max_tokens * cfg.claude_output_usd_per_million) / 1_000_000,
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",
             "analysis_interval_seconds": cfg.analysis_interval_seconds, "daily_budget_usd": cfg.daily_ai_budget_usd,
             "stale_after_seconds": cfg.stale_after_seconds, "worker": "ONLINE" if await request.app.state.redis.get("worker:heartbeat") else "OFFLINE",
@@ -270,7 +274,7 @@ async def metrics(user=Depends(current_user)):
     async with Session() as session:
         count, cost, latency = (await session.execute(select(func.count(AnalysisRecord.id), func.coalesce(func.sum(AnalysisRecord.cost_usd), 0), func.coalesce(func.avg(AnalysisRecord.latency_ms), 0)))).one()
         failed_cost = await session.scalar(select(func.coalesce(func.sum(Audit.details["cost_usd"].as_float()), 0)).where(Audit.action.in_(["CLAUDE_INVALID", "CLAUDE_HEALTHCHECK"])))
-        budget_reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= utcnow().replace(hour=0, minute=0, second=0, microsecond=0)))
+        budget_reserved = await reserved_today(session)
         alerts_count = await session.scalar(select(func.count(Alert.id)))
         invalidated = await session.scalar(select(func.count(Alert.id)).where(Alert.state == "INVALIDADO"))
         evaluated = (await session.scalars(select(Evaluation).where(Evaluation.asset.in_(ACTIVE_ASSETS)))).all()

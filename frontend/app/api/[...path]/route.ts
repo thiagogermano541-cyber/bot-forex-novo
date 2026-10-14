@@ -18,7 +18,7 @@ async function proxy(request: NextRequest, context: {params: Promise<{path: stri
     const upstream = await fetch(target, {
       method: request.method, headers,
       body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
-      redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(240000)
+      redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(300000)
     });
     const outgoing = new Headers({"Cache-Control": "no-store"});
     for (const key of ["content-type", "retry-after"]) {
