@@ -110,8 +110,13 @@ async def main():
             tasks.append(asyncio.create_task(diagnose()))
         try:
             for _ in range(30):
-                if await redis.get("snapshot:BTC/USD"):
-                    break
+                cached = await redis.get("snapshot:BTC/USD")
+                if cached:
+                    import json
+                    from .schemas import Snapshot
+                    snapshot = Snapshot.model_validate(json.loads(cached)["data"])
+                    if (utcnow()-snapshot.captured_at).total_seconds() <= cfg.stale_after_seconds:
+                        break
                 await asyncio.sleep(2)
             tasks.append(asyncio.create_task(analysis_loop(service)))
             if cfg.verify_btc_on_start:

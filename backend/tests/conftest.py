@@ -6,6 +6,10 @@ import pytest
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-only-secret-at-least-thirty-two-characters"
 os.environ["ADMIN_PASSWORD"] = "test-only-admin-password"
+os.environ["ADMIN_EMAIL"] = "admin@jarvis.local"
+os.environ["APP_ORIGIN"] = "http://localhost:3000"
+os.environ["COOKIE_SECURE"] = "false"
+os.environ["CLAUDE_ENABLED"] = "true"
 os.environ["KRAKEN_ENABLED"] = "false"
 os.environ["ANTHROPIC_API_KEY"] = ""
 

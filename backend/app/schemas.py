@@ -97,7 +97,10 @@ class Snapshot(StrictModel):
             rows = self.candles.get(tf, [])
             if len(rows) < 20:
                 issues.append(f"{tf}: menos de 20 candles fechados")
-            elif self.captured_at.timestamp() - rows[-1].timestamp.timestamp() > seconds + stale_seconds:
+            # A closed candle's OPEN can be almost two periods old while the
+            # next candle is still forming. Measure that natural window before
+            # applying the provider's late-data tolerance.
+            elif self.captured_at.timestamp() - rows[-1].timestamp.timestamp() > 2 * seconds + stale_seconds:
                 issues.append(f"{tf}: candles desatualizados")
             if any((b.timestamp-a.timestamp).total_seconds() != seconds for a, b in zip(rows, rows[1:])):
                 issues.append(f"{tf}: lacunas no histórico")
