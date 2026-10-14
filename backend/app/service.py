@@ -1,4 +1,5 @@
 import hashlib
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -114,7 +115,8 @@ class AnalysisService:
                     session.add(reservation)
                     await session.commit()
                     try:
-                        result, metadata = await self.claude.analyze(snapshot, memory)
+                        async with asyncio.timeout(180):
+                            result, metadata = await self.claude.analyze(snapshot, memory)
                     except InvalidClaudeResponse as exc:
                         log.warning("claude_response_rejected", asset=asset, reason=exc.reason,
                                     input_tokens=exc.usage["input_tokens"], output_tokens=exc.usage["output_tokens"])
