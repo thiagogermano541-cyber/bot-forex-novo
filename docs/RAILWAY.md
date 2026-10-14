@@ -2,6 +2,8 @@
 
 Fonte: `thiagogermano541-cyber/bot-forex-novo`, branch `main`.
 
+A importação padrão pela raiz agora usa `Dockerfile` e `railway.toml` na raiz para construir somente o **dashboard**. Renomeie esse serviço para `frontend` ao montar os cinco serviços abaixo e configure `BACKEND_URL`. A página de login servida pelo frontend não comprova que a API, o banco ou as integrações foram configurados. Para os serviços adicionais, use a raiz `/backend` e seus configs dedicados.
+
 ## Serviços
 
 Crie um projeto JARVIS AI com PostgreSQL, Redis e três serviços conectados ao mesmo repositório. Use **uma réplica** para API e worker nesta versão. PostgreSQL e Redis devem manter os volumes persistentes dos templates Railway.

@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+.venv
+**/node_modules
+**/.next
+**/__pycache__
+**/*.egg-info
+**/*.tsbuildinfo
+backend
+docs
+*.zip
