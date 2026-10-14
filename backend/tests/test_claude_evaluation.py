@@ -43,6 +43,33 @@ async def test_truncated_response_is_never_published(snapshot):
     await client.client.close()
 
 
+async def test_claude_revises_rejected_decision_and_accounts_both_calls(snapshot, wait_analysis):
+    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+                           claude_input_usd_per_million=1, claude_output_usd_per_million=5))
+    accepted = wait_analysis.model_copy(deep=True)
+    for evidence in accepted.evidence:
+        evidence.source_ids = ["M1_C30"]
+    for scenario in accepted.scenarios:
+        scenario.evidence_ids = ["M1_C30"]
+    rejected = accepted.model_dump(mode="json")
+    rejected["decision"] = "CENÁRIO DE ALTA"
+    rejected["missing_data"] = ["Confirmação ausente"]
+    responses = [SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
+                 content=[SimpleNamespace(type="tool_use", id=f"tool_test_{index}", name="submit_analysis", input=value)])
+                 for index, value in enumerate((rejected, accepted.model_dump(mode="json")))]
+    client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
+    client.client.messages.create = AsyncMock(side_effect=responses)
+    result, usage = await client.analyze(snapshot, [])
+    assert result.decision == "AGUARDAR"
+    assert client.client.messages.create.call_count == 2
+    assert usage["input_tokens"] == 2000
+    assert usage["cost_usd"] == pytest.approx(0.003)
+    feedback = client.client.messages.create.call_args.kwargs["messages"][-1]["content"][0]
+    assert feedback["type"] == "tool_result" and feedback["is_error"] is True
+    assert "empty missing_data" in feedback["content"]
+    await client.client.close()
+
+
 def test_fixed_horizon_does_not_use_later_price(snapshot):
     end = snapshot.model_copy(deep=True)
     end.captured_at += timedelta(minutes=61)

@@ -183,7 +183,9 @@ class Analysis(StrictModel):
             direction = "ALTA" if self.decision == Decision.BULL else "BAIXA"
             scenario = next(s for s in self.scenarios if s.direction == direction)
             if not self.evidence or self.missing_data or not self.zones or not scenario.invalidation_price:
-                raise ValueError("Directional decision requires evidence, zones and invalidation")
+                raise ValueError(f"Directional decision requires evidence, zones, empty missing_data and numeric invalidation: "
+                                 f"evidence={len(self.evidence)}, zones={len(self.zones)}, missing_data={self.missing_data}, "
+                                 f"invalidation_price={scenario.invalidation_price}")
             midpoint = (snapshot.quote.bid + snapshot.quote.ask) / 2 if snapshot.quote else 0
             if (direction == "ALTA" and scenario.invalidation_price >= midpoint) or (direction == "BAIXA" and scenario.invalidation_price <= midpoint):
                 raise ValueError("Invalidation is inconsistent with reference price")

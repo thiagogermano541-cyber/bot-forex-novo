@@ -8,7 +8,7 @@ import structlog
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 
-from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse
+from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse, MAX_ANALYSIS_ATTEMPTS
 from .config import settings
 from .db import Alert, AnalysisRecord, Audit, MarketSnapshot, Session
 from .providers.kraken import Kraken
@@ -107,23 +107,25 @@ class AnalysisService:
                     reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= day))
                     worst = (self.config.claude_input_token_limit * self.config.claude_input_usd_per_million
                              + self.config.claude_max_tokens * self.config.claude_output_usd_per_million) / 1_000_000
-                    if reserved + worst * 3 > self.config.daily_ai_budget_usd:
-                        raise ClaudeUnavailable("Orçamento diário insuficiente para uma chamada com retries")
+                    if reserved + worst * MAX_ANALYSIS_ATTEMPTS > self.config.daily_ai_budget_usd:
+                        raise ClaudeUnavailable("Orçamento diário insuficiente para uma chamada com revisão")
                     # Persist a conservative ceiling before external I/O. Unknown timeout usage
                     # remains charged against the daily quota, never reported as actual spend.
-                    reservation = Audit(action="AI_BUDGET", actor=actor, details={"snapshot_id": snapshot_id, "reserved_usd": worst*3, "status": "RESERVED"})
+                    reservation = Audit(action="AI_BUDGET", actor=actor, details={"snapshot_id": snapshot_id, "reserved_usd": worst*MAX_ANALYSIS_ATTEMPTS, "status": "RESERVED"})
                     session.add(reservation)
                     await session.commit()
                     try:
-                        async with asyncio.timeout(180):
+                        async with asyncio.timeout(270):
                             result, metadata = await self.claude.analyze(snapshot, memory)
                     except InvalidClaudeResponse as exc:
                         log.warning("claude_response_rejected", asset=asset, reason=exc.reason,
                                     input_tokens=exc.usage["input_tokens"], output_tokens=exc.usage["output_tokens"])
+                        reservation.details = {**reservation.details, "status": "REJECTED",
+                                               "reserved_usd": exc.usage["cost_usd"], "known_cost_usd": exc.usage["cost_usd"]}
                         session.add(Audit(action="CLAUDE_INVALID", actor=actor, details={"snapshot_id": snapshot_id, "reason": exc.reason, **exc.usage}))
                         await session.commit()
                         raise
-                    reservation.details = {**reservation.details, "status": "COMPLETE", "known_cost_usd": metadata["cost_usd"]}
+                    reservation.details = {**reservation.details, "status": "COMPLETE", "reserved_usd": metadata["cost_usd"], "known_cost_usd": metadata["cost_usd"]}
                     model = self.config.claude_model
                 record = AnalysisRecord(snapshot_id=snapshot_id, asset=asset, decision=result.decision,
                                         data=result.model_dump(mode="json"), mode=mode, model=model, **metadata)
