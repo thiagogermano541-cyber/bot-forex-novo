@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
+from redis.exceptions import LockError
 from sqlalchemy import func, select, text
 
 from .auth import DUMMY_HASH, admin, current_user, hasher, seed_admin, token_for
@@ -138,7 +139,7 @@ async def config(request: Request, user=Depends(current_user)):
             "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "assets": list(ACTIVE_ASSETS),
             "market_refresh_seconds": cfg.market_refresh_seconds,
             "analysis_mode": "MANUAL" if cfg.analysis_on_demand_only else "AUTOMÁTICO",
-            "analysis_protocol_version": 3,
+            "analysis_protocol_version": 4,
             "daily_budget_enabled": cfg.enforce_daily_budget,
             "max_request_cost_usd": 2 * ((cfg.claude_input_token_limit + 256) * cfg.claude_input_usd_per_million + cfg.claude_max_tokens * cfg.claude_output_usd_per_million) / 1_000_000,
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",
@@ -181,6 +182,8 @@ class RunRequest(BaseModel):
 async def run(body: RunRequest, request: Request, user=Depends(admin)):
     try:
         return serialize(await request.app.state.service.run(body.asset, actor=user.id))
+    except LockError:
+        raise HTTPException(409, "Uma análise já está em processamento. Aguarde a conclusão antes de solicitar outra.", headers={"Retry-After": "10"}) from None
     except ClaudeProviderFailure as exc:
         raise HTTPException(exc.status_code, str(exc), headers={"Retry-After": "30"} if exc.status_code == 429 else None) from None
     except (ClaudeUnavailable, InvalidClaudeResponse) as exc:

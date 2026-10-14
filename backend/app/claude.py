@@ -107,6 +107,7 @@ class ClaudeClient:
         self.config = config
         self.client = AsyncAnthropic(api_key=config.anthropic_api_key.get_secret_value() or "unconfigured",
                                      max_retries=0, timeout=120)
+        self.strict_schema_unavailable = False
 
     async def analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         try:
@@ -126,7 +127,7 @@ class ClaudeClient:
             prepared = prepare_market(snapshot, memory, limits)
             messages = [{"role": "user", "content": json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":"))}]
             tool = {"name": "submit_analysis", "description": "Retorna análise e plano experimental sustentados pelo snapshot.",
-                    "strict": True, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
+                    "strict": not self.strict_schema_unavailable, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
             count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                             messages=messages, tools=[tool])
             if count.input_tokens <= self.config.claude_input_token_limit - min(4096, self.config.claude_max_tokens):
@@ -158,17 +159,34 @@ class ClaudeClient:
                     raise
             log.info("claude_request_started", asset=snapshot.asset, input_tokens=count.input_tokens,
                      max_output_tokens=self.config.claude_max_tokens, attempt=attempt)
-            try:
-                response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
-                                                             messages=messages, tools=[tool],
-                                                             tool_choice={"type": "tool", "name": "submit_analysis"},
-                                                             max_tokens=self.config.claude_max_tokens)
-            except Exception as exc:
-                # Rejected requests have no generated tokens. Network timeouts
-                # retain the reservation because provider usage is unknown.
-                if budget is not None and 400 <= getattr(exc, "status_code", 0) < 500 and getattr(exc, "status_code", 0) != 408:
-                    await budget.settle(0)
-                raise
+            while True:
+                try:
+                    response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
+                                                                 messages=messages, tools=[tool],
+                                                                 tool_choice={"type": "tool", "name": "submit_analysis"},
+                                                                 max_tokens=self.config.claude_max_tokens)
+                except Exception as exc:
+                    # Rejected requests have no generated tokens. Network timeouts
+                    # retain the reservation because provider usage is unknown.
+                    if budget is not None and 400 <= getattr(exc, "status_code", 0) < 500 and getattr(exc, "status_code", 0) != 408:
+                        await budget.settle(0)
+                    body = getattr(exc, "body", {})
+                    error = body.get("error", body) if isinstance(body, dict) else {}
+                    reason = str(error.get("message", "")).lower() if isinstance(error, dict) else ""
+                    compilation_limit = "grammar" in reason and any(word in reason for word in ("too large", "complex", "compilation"))
+                    if getattr(exc, "status_code", 0) == 400 and tool["strict"] and compilation_limit:
+                        # The rejected request consumed no inference tokens. Keep
+                        # official JSON tool output and every backend validation;
+                        # only provider-side grammar enforcement is disabled.
+                        self.strict_schema_unavailable = True
+                        tool = {**tool, "strict": False}
+                        log.warning("claude_grammar_fallback", asset=snapshot.asset,
+                                    backend_validation="Pydantic + exact snapshot grounding")
+                        if budget is not None:
+                            await budget.reserve()
+                        continue
+                    raise
+                break
             usage = response.usage
             log.info("claude_response_received", asset=snapshot.asset, stop_reason=response.stop_reason,
                      input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, attempt=attempt)
