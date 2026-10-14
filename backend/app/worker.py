@@ -128,6 +128,9 @@ async def main():
                 tasks.append(asyncio.create_task(analysis_loop(service)))
             if cfg.verify_btc_on_start:
                 tasks.append(asyncio.create_task(verify_public_once()))
+            if cfg.verify_manual_repair_id:
+                from .verify_manual_repair import run_once
+                tasks.append(asyncio.create_task(run_once(redis)))
             while True:
                 try:
                     async with redis.lock("jarvis:outbox", timeout=180, blocking_timeout=1):

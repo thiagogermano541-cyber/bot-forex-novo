@@ -4,6 +4,7 @@ import httpx
 
 from app import db
 from app.main import app
+from app.claude import ClaudeProviderFailure
 
 
 async def test_auth_integrity_and_persistence(monkeypatch):
@@ -43,6 +44,13 @@ async def test_auth_integrity_and_persistence(monkeypatch):
             assert response.json()["model"] == "integrity-gate"
             assert len((await client.get("/analyses")).json()) == 1
             assert (await client.get("/alerts")).json() == []
+            real_run = app.state.service.run
+            monkeypatch.setattr(app.state.service, "run", AsyncMock(side_effect=ClaudeProviderFailure("Limite da Anthropic", 429)))
+            limited = await client.post("/analyses", headers=origin, json={"asset": "BTC/USD"})
+            assert limited.status_code == 429
+            assert limited.json()["detail"] == "Limite da Anthropic"
+            assert limited.headers["retry-after"] == "30"
+            monkeypatch.setattr(app.state.service, "run", real_run)
             await client.post("/users", headers=origin, json={"email": "viewer@test.local", "password": "test-only-viewer-password", "role": "viewer"})
             await client.post("/auth/logout", headers=origin, json={})
             await client.post("/auth/login", headers=origin, json={"email": "viewer@test.local", "password": "test-only-viewer-password"})

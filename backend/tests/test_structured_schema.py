@@ -14,6 +14,7 @@ def test_strict_tool_schema_uses_only_supported_constraints():
             assert node.get("minItems", 0) in (0, 1)
             if node.get("type") == "object":
                 assert node["additionalProperties"] is False
+                assert set(node["required"]) == set(node.get("properties", {}))
             for value in node.values():
                 verify(value)
 
@@ -26,3 +27,16 @@ def test_strict_tool_schema_uses_only_supported_constraints():
     # API grammar compatibility does not relax backend business validation.
     assert Analysis.model_json_schema()["properties"]["summary"]["minLength"] == 10
     assert Analysis.model_json_schema()["$defs"]["Zone"]["properties"]["low"]["exclusiveMinimum"] == 0
+
+
+def test_large_context_uses_compact_grammar_without_weakening_grounding(snapshot, wait_analysis):
+    import re
+    import pytest
+    ids = {f"{tf}_C{i:02d}" for tf in TIMEFRAMES for i in range(1, 61)} | {"Q_CURRENT", "BOOK_CURRENT"}
+    reference = analysis_tool_schema(ids)["$defs"]["SourceReference"]
+    assert "enum" not in reference
+    assert re.fullmatch(reference["pattern"], "H4_C60")
+    assert not re.fullmatch(reference["pattern"], "hidden:institutional-order")
+    wait_analysis.evidence[0].source_ids = ["M1_C99"]
+    with pytest.raises(ValueError, match="unknown evidence"):
+        wait_analysis.validate_grounding(snapshot)

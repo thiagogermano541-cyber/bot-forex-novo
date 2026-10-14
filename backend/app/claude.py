@@ -2,7 +2,7 @@ import json
 import time
 import structlog
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIStatusError, APITimeoutError, APIConnectionError
 from pydantic import ValidationError
 
 from .config import Settings
@@ -70,6 +70,38 @@ class ClaudeUnavailable(Exception):
     pass
 
 
+class ClaudeProviderFailure(ClaudeUnavailable):
+    def __init__(self, message, status_code=503):
+        self.status_code = status_code
+        super().__init__(message)
+
+
+def provider_failure(exc, config):
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    reason = str(error.get("message", "")) if isinstance(error, dict) else ""
+    for secret in (config.anthropic_api_key, config.jwt_secret, config.admin_password):
+        value = secret.get_secret_value()
+        if value:
+            reason = reason.replace(value, "[REDACTED]")
+    log.warning("claude_api_failed", http_status=status, error_type=type(exc).__name__,
+                reason=reason[:800], request_id=getattr(exc, "request_id", None))
+    if isinstance(exc, APITimeoutError):
+        return ClaudeProviderFailure("Claude demorou além do limite. A análise não foi concluída; tente novamente mais tarde.")
+    if isinstance(exc, APIConnectionError):
+        return ClaudeProviderFailure("Conexão com Claude indisponível. Os dados de BTC continuam atualizando.")
+    if status in (401, 403):
+        return ClaudeProviderFailure("Claude recusou a autenticação. Verifique a chave e as permissões da Anthropic no servidor.")
+    if status == 429:
+        return ClaudeProviderFailure("Limite de requisições da Anthropic. Aguarde antes de solicitar outra análise.", 429)
+    if any(term in reason.lower() for term in ("credit balance", "usage limit", "quota", "billing")):
+        return ClaudeProviderFailure("A Anthropic bloqueou a análise por saldo ou limite de uso. Verifique os créditos e limites na sua conta Anthropic.")
+    if status == 400:
+        return ClaudeProviderFailure("Claude recusou o formato da análise. Nenhum sinal foi emitido; o motivo foi registrado no servidor.")
+    return ClaudeProviderFailure("Claude está temporariamente indisponível. A coleta de BTC continua funcionando.")
+
+
 class ClaudeClient:
     def __init__(self, config: Settings):
         self.config = config
@@ -77,6 +109,12 @@ class ClaudeClient:
                                      max_retries=0, timeout=120)
 
     async def analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
+        try:
+            return await self._analyze(snapshot, memory, budget)
+        except (APIStatusError, APIConnectionError) as exc:
+            raise provider_failure(exc, self.config) from None
+
+    async def _analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         if not self.config.claude_ready:
             raise ClaudeUnavailable("Claude NÃO CONFIGURADO: configure chave, modelo e tarifas")
         # Start with the entire available window. Free token counting selects a
