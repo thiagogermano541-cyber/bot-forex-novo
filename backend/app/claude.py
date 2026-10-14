@@ -51,9 +51,18 @@ class ClaudeClient:
             raise ClaudeUnavailable("Claude NÃO CONFIGURADO: configure chave, modelo e tarifas")
         context = snapshot.model_dump(mode="json")
         context["candles"] = {tf: [r.model_dump(mode="json") for r in rows[-30:]] for tf, rows in snapshot.candles.items()}
+        context["trades"] = context["trades"][-20:]
         # Validate citations against exactly what was sent, rather than withheld history.
         supplied = Snapshot.model_validate(context)
-        payload = json.dumps({"market_data": context, "previous_analyses": memory}, ensure_ascii=False)
+        # Keep source IDs and every OHLCV number, but send repeated candle metadata
+        # once per timeframe instead of repeating it 180 times in the prompt.
+        metadata_by_tf = {}
+        for tf, rows in context["candles"].items():
+            if rows and len({(r["provider"], r["volume_kind"]) for r in rows}) == 1:
+                metadata_by_tf[tf] = {"provider": rows[0]["provider"], "volume_kind": rows[0]["volume_kind"]}
+                context["candles"][tf] = [{k: v for k, v in row.items() if k not in ("timeframe", "provider", "volume_kind")} for row in rows]
+        context["candle_metadata"] = metadata_by_tf
+        payload = json.dumps({"market_data": context, "previous_analyses": memory}, ensure_ascii=False, separators=(",", ":"))
         messages = [{"role": "user", "content": payload}]
         tool = {"name": "submit_analysis", "description": "Retorna análise financeira estruturada, sem executar ações.",
                 "input_schema": Analysis.model_json_schema()}
@@ -61,6 +70,8 @@ class ClaudeClient:
         count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                         messages=messages, tools=[tool])
         if count.input_tokens > self.config.claude_input_token_limit:
+            log.warning("claude_context_too_large", asset=snapshot.asset, input_tokens=count.input_tokens,
+                        input_token_limit=self.config.claude_input_token_limit)
             raise ClaudeUnavailable("Contexto ultrapassa limite de tokens")
         log.info("claude_request_started", asset=snapshot.asset, input_tokens=count.input_tokens,
                  max_output_tokens=self.config.claude_max_tokens)
