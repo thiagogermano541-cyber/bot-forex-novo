@@ -268,7 +268,7 @@ async def evaluate(user=Depends(admin)):
 async def metrics(user=Depends(current_user)):
     async with Session() as session:
         count, cost, latency = (await session.execute(select(func.count(AnalysisRecord.id), func.coalesce(func.sum(AnalysisRecord.cost_usd), 0), func.coalesce(func.avg(AnalysisRecord.latency_ms), 0)))).one()
-        failed_cost = await session.scalar(select(func.coalesce(func.sum(Audit.details["cost_usd"].as_float()), 0)).where(Audit.action == "CLAUDE_INVALID"))
+        failed_cost = await session.scalar(select(func.coalesce(func.sum(Audit.details["cost_usd"].as_float()), 0)).where(Audit.action.in_(["CLAUDE_INVALID", "CLAUDE_HEALTHCHECK"])))
         budget_reserved = await session.scalar(select(func.coalesce(func.sum(Audit.details["reserved_usd"].as_float()), 0)).where(Audit.action == "AI_BUDGET", Audit.created_at >= utcnow().replace(hour=0, minute=0, second=0, microsecond=0)))
         alerts_count = await session.scalar(select(func.count(Alert.id)))
         invalidated = await session.scalar(select(func.count(Alert.id)).where(Alert.state == "INVALIDADO"))
