@@ -171,8 +171,9 @@ class Analysis(StrictModel):
         references = [i for e in self.evidence for i in e.source_ids]
         references += [i for z in self.zones for i in z.source_ids]
         references += [i for s in self.scenarios for i in s.evidence_ids]
-        if set(references) - known:
-            raise ValueError("Claude cited unknown evidence")
+        unknown = sorted(set(references) - known)
+        if unknown:
+            raise ValueError(f"Claude cited unknown evidence: {unknown[:8]}")
         if self.decision != Decision.INSUFFICIENT:
             if {s.direction for s in self.scenarios} != {"ALTA", "BAIXA", "LATERAL"}:
                 raise ValueError("All three scenarios are required")

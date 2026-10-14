@@ -54,7 +54,7 @@ class ClaudeClient:
         context = snapshot.model_dump(mode="json")
         context["candles"] = {tf: [r.model_dump(mode="json") for r in rows[-30:]] for tf, rows in snapshot.candles.items()}
         context["trades"] = context["trades"][-20:]
-        original_supplied = Snapshot.model_validate(context)
+        original_supplied = Snapshot.model_validate(context).model_copy(deep=True)
         references = {}
         for tf, rows in context["candles"].items():
             for index, row in enumerate(rows, 1):
@@ -85,8 +85,12 @@ class ClaudeClient:
                                          for scenario in row.get("scenarios", [])]} for row in memory]
         payload = json.dumps({"market_data": context, "previous_analyses": previous}, ensure_ascii=False, separators=(",", ":"))
         messages = [{"role": "user", "content": payload}]
+        schema = Analysis.model_json_schema()
+        schema["$defs"]["SourceReference"] = {"type": "string", "enum": sorted(supplied.evidence_ids())}
+        for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids")):
+            schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
         tool = {"name": "submit_analysis", "description": "Retorna análise financeira estruturada, sem executar ações.",
-                "input_schema": Analysis.model_json_schema()}
+                "input_schema": schema}
         log.info("claude_token_count_started", asset=snapshot.asset, model=self.config.claude_model)
         count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                         messages=messages, tools=[tool])
@@ -108,11 +112,14 @@ class ClaudeClient:
                 + usage.output_tokens * self.config.claude_output_usd_per_million) / 1_000_000
         metadata = dict(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
                         cost_usd=cost, latency_ms=int((time.monotonic()-start)*1000))
+        validation_stage = "structured_response"
         try:
             blocks = [b for b in response.content if b.type == "tool_use" and b.name == "submit_analysis"]
             if response.stop_reason != "tool_use" or len(blocks) != 1:
                 raise ValueError(f"Resposta incompleta: {response.stop_reason}; blocos estruturados: {len(blocks)}")
-            analysis = Analysis.model_validate(blocks[0].input).validate_grounding(supplied)
+            analysis = Analysis.model_validate(blocks[0].input)
+            validation_stage = "current_context_references"
+            analysis.validate_grounding(supplied)
             # Persist the provider's original identifiers, so every citation still
             # points to the exact immutable snapshot that the operator can export.
             for evidence in analysis.evidence:
@@ -121,6 +128,7 @@ class ClaudeClient:
                 zone.source_ids = [references.get(ref, ref) for ref in zone.source_ids]
             for scenario in analysis.scenarios:
                 scenario.evidence_ids = [references.get(ref, ref) for ref in scenario.evidence_ids]
+            validation_stage = "persisted_snapshot_references"
             analysis.validate_grounding(original_supplied)
         except ValueError as exc:
             # Usage must still be accounted even if output cannot be trusted.
@@ -128,7 +136,7 @@ class ClaudeClient:
                 reason = "; ".join(f"{e['loc']}: {e['msg']}" for e in exc.errors(include_input=False)[:6])
             else:
                 reason = str(exc)
-            raise InvalidClaudeResponse(metadata, reason=reason) from exc
+            raise InvalidClaudeResponse(metadata, reason=f"{validation_stage}: {reason}") from exc
         return analysis, metadata
 
 
