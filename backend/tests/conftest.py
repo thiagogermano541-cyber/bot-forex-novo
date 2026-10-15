@@ -17,17 +17,36 @@ from app.schemas import Candle, Quote, Snapshot, TIMEFRAMES
 
 
 def as_wire(raw):
-    """Model-response fixture, using the real strict tool's grouped transport."""
+    """Encode fixture answers using the real tool's typed row protocol."""
     from copy import deepcopy
-    from app.analysis_contract import ANALYSIS_GROUPS, PLAN_GROUPS
     raw = deepcopy(raw)
-    result = {name: {key: raw[key] for key in keys} for name, keys in ANALYSIS_GROUPS.items()}
-    result["scenarios"] = raw["scenarios"]
+    rows = []
+    def row(section, strings=(), numbers=(), sources=()):
+        rows.append(dict(section=section, strings=list(strings), numbers=list(numbers), sources=list(sources)))
+    for section, key in (("SUMMARY", "summary"), ("JUSTIFICATION", "justification"), ("CHANGE", "change_from_previous")):
+        row(section, [raw[key]])
+    for section, key in (("CONFLICTS", "conflicts"), ("RISKS", "risks"), ("MISSING_DATA", "missing_data")):
+        row(section, raw[key])
+    for item in raw["evidence"]:
+        row("EVIDENCE", [item["category"], item["description"]], sources=item["source_ids"])
+    for item in raw["zones"]:
+        row("ZONE", [item["kind"], item["explanation"]], [item["low"], item["high"]], item["source_ids"])
+    for item in raw["scenarios"]:
+        row("SCENARIO", [item["direction"], item["thesis"], item["invalidation"], *item["confirmation"]],
+            [] if item["invalidation_price"] is None else [item["invalidation_price"]], item["evidence_ids"])
+    for timeframe, text in raw["timeframe_context"].items():
+        row("TIMEFRAME", [timeframe, text])
+    result = dict(decision=raw["decision"], rows=rows)
     plan = raw.get("trade_plan")
-    if isinstance(plan, dict) and plan:
-        plan = {**{name: {key: plan[key] for key in keys} for name, keys in PLAN_GROUPS.items()},
-                "targets": plan["targets"]}
-    result["trade_plan"] = plan
+    if plan is not None:
+        if not isinstance(plan, dict) or not plan:
+            result["invalid_plan"] = plan  # Deliberately malformed SDK response in rejection tests.
+            return result
+        row("PLAN", [plan[k] for k in ("side", "status", "setup_type", "timeframe", "confirmation")],
+            [plan[k] for k in ("entry_low", "entry_high", "stop_loss", "valid_for_minutes")], plan["confirmation_source_ids"])
+        for target in plan["targets"]:
+            row("TARGET", [target["anchor"]["field"], target["rationale"]], sources=[target["anchor"]["candle_id"]])
+        row("CANCEL", plan["cancel_if"])
     return result
 
 

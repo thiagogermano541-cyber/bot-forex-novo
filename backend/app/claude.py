@@ -10,7 +10,7 @@ from .schemas import Analysis, Snapshot
 from .structured_schema import analysis_tool_schema
 from .market_context import prepare_market
 from .target_anchors import resolve_target_anchors
-from .analysis_contract import unpack_grouped_analysis
+from .analysis_contract import unpack_analysis
 from .schemas import TIMEFRAMES
 
 log = structlog.get_logger()
@@ -37,8 +37,8 @@ Livro pontual não comprova absorção, spoofing nem persistência de ordens. N�
 Não persiga movimento fora da região de entrada. Distinga oportunidade potencial e confirmação atual.
 Ao propor trade_plan, forneça lado, setup, período, faixa de entrada, stop estrutural,
 alvos escolhidos por anchor={candle_id,field}, gatilho observável, prazo e condições de cancelamento.
-Cada alvo deve selecionar um candle_id atual e field="high" ou "low". O backend copia o preço
-exato desse campo; não escreva price nem source_ids nos alvos. Escolha a região e justifique-a.
+Cada alvo deve selecionar um candle_id atual e o campo high ou low. O backend copia o preço
+exato desse campo. No transporte, use uma row TARGET com o campo e a fonte. Escolha a região e justifique-a.
 decision="CENÁRIO DE ALTA" significa COMPRA; decision="CENÁRIO DE BAIXA" significa VENDA.
 Essas decisões exigem status CONFIRMADO, cotação de referência dentro da faixa de entrada,
 confirmação citando o último candle fechado do período escolhido e evidências OBSERVADO
@@ -52,9 +52,9 @@ Use um único alvo se só existir uma região sustentada. Não altere preços ob
 Se o gatilho depende de evento futuro, use trade_plan PENDENTE e decision="AGUARDAR",
 mesmo quando a tendência favorecer alta ou baixa. Tendência não equivale a entrada confirmada.
 Exemplo de consistência: viés de baixa + aguardar rompimento = AGUARDAR com plano PENDENTE.
-Se não houver setup defensável, trade_plan=null (null JSON literal, sem aspas).
-trade_plan deve ser um objeto ou null, nunca uma string, lista vazia ou texto descritivo.
-Nunca force um plano para preencher campos.
+Se não houver setup defensável, não inclua rows PLAN, TARGET ou CANCEL.
+O backend representa a ausência explícita dessas rows como trade_plan=null na resposta pública.
+Nunca force um plano para preencher campos nem escreva JSON dentro de strings.
 Níveis de entrada/stop/alvos são propostas experimentais; não preços futuros conhecidos.
 O prazo valid_for_minutes deve ser 1 a 60, coerente com o período; não trate plano vencido como atual.
 Não use porcentagem de acerto ou confiança numérica. Risco/retorno é projetado e não assegura resultado.
@@ -69,9 +69,18 @@ Para direção, forneça zonas e invalidação numérica coerente com preço de 
 Não garanta lucro. Todas as análises são experimentais até avaliação independente.
 Compare a memória anterior com os dados atuais; fatos passados não são fatos atuais.
 Use exclusivamente a ferramenta submit_analysis, que apenas retorna JSON validado.
-O JSON da ferramenta agrupa os campos em conclusion, observations, limitations, scenarios e trade_plan.
-decision fica em conclusion.decision. Um plano usa position, levels, trigger, targets e expiry.
-Esses grupos apenas organizam a resposta; todos os requisitos analíticos continuam iguais.
+O transporte da ferramenta tem APENAS decision e rows. Cada row tem section, strings, numbers, sources.
+A semântica da análise é a mesma. Colunas exatas por section (demais arrays ficam vazios):
+SUMMARY: strings=[summary]. JUSTIFICATION: strings=[justification]. CHANGE: strings=[change_from_previous].
+CONFLICTS, RISKS, MISSING_DATA: strings=lista correspondente. Uma row de cada uma dessas seis sections é obrigatória, mesmo lista vazia.
+EVIDENCE: strings=[categoria, descrição], sources=IDs. ZONE: strings=[tipo, explicação], numbers=[low,high], sources=IDs.
+SCENARIO: strings=[ALTA/BAIXA/LATERAL, tese, invalidação, confirmação1,...], numbers=[invalidation_price] ou [] se ausente, sources=IDs.
+TIMEFRAME: strings=[M1/M5/M15/M30/H1/H4, interpretação]. Uma row por período, sem repetição.
+PLAN: strings=[COMPRA/VENDA, CONFIRMADO/PENDENTE, setup_type, timeframe, confirmação], numbers=[entry_low,entry_high,stop_loss,valid_for_minutes], sources=IDs de confirmação.
+TARGET: strings=[high/low, justificativa], sources=[candle_id]. O preço é o campo exato do candle escolhido. Uma row por alvo, em ordem.
+CANCEL: strings=condições de cancelamento.
+Sem plano defensável, OMITA todas as rows PLAN, TARGET e CANCEL; o backend representa essa escolha por trade_plan=null.
+Com plano, use exatamente uma row PLAN, uma CANCEL e 1 a 2 TARGET. Nunca escreva JSON dentro de strings.
 Seja conciso. Summary até 80 palavras; justification até 120 palavras.
 No máximo 6 evidências, 4 zonas, 3 riscos, 2 alvos e 3 condições por cenário.
 Cada timeframe_context até 35 palavras e cada tese até 60 palavras.
@@ -202,7 +211,7 @@ class ClaudeClient:
             validation_stage = "structured_response"
             decoded_input = None
             try:
-                decoded_input = unpack_grouped_analysis(blocks[0].input)
+                decoded_input = unpack_analysis(blocks[0].input)
                 analysis = Analysis.model_validate(resolve_target_anchors(decoded_input, supplied))
                 validation_stage = "current_context_references"
                 analysis.validate_grounding(supplied)
@@ -238,8 +247,8 @@ class ClaudeClient:
                         if k in raw_plan} if isinstance(raw_plan, dict) else None
                 review = {"instruction": "Corrija TODOS os problemas usando exclusivamente o snapshot original. "
                           "A própria IA deve decidir novamente. Verifique os preços EXATOS dos anchors e as desigualdades. "
-                          "Alvos devem ser distintos, ordenados e usar anchor={candle_id,field: high ou low}, sem price/source_ids. "
-                          "Sem plano defensável, trade_plan deve ser null JSON literal, nunca string ou lista. "
+                          "Alvos devem ser distintos e ordenados: rows TARGET têm strings=[high/low,justificativa], sources=[candle_id]. "
+                          "Sem plano defensável, omita rows PLAN/TARGET/CANCEL. Use o mesmo formato decision+rows da ferramenta. "
                           "Sem confirmação, escolha AGUARDAR. Limitações opcionais ficam em risks.",
                           "validation_errors": reason, "previous_decision": raw.get("decision"),
                           "previous_plan_type": type(raw_plan).__name__, "rejected_plan": plan}

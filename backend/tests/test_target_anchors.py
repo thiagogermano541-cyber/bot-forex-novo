@@ -21,9 +21,9 @@ def anchored_payload(analysis, candle_id):
 
 def test_target_contract_requests_an_anchor_instead_of_an_unbound_price():
     schema = analysis_tool_schema({"H1_C30", "Q_CURRENT"})
-    target = schema["$defs"]["SignalTarget"]
-    assert set(target["properties"]) == {"anchor", "rationale"}
-    assert schema["$defs"]["TargetAnchor"]["properties"]["field"]["enum"] == ["high", "low"]
+    row = schema["properties"]["rows"]["items"]
+    assert "TARGET" in row["properties"]["section"]["enum"]
+    assert set(row["properties"]) == {"section", "strings", "numbers", "sources"}
 
 
 @pytest.mark.parametrize("field", ["high", "low"])
