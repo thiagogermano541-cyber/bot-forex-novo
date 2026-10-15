@@ -1,3 +1,4 @@
+from conftest import as_wire
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -24,7 +25,7 @@ def wire_plan(snapshot, confirmed_buy):
 
 def response(raw):
     return SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-        content=[SimpleNamespace(type="tool_use", id="test_plan", name="submit_analysis", input=raw)])
+        content=[SimpleNamespace(type="tool_use", id="test_plan", name="submit_analysis", input=as_wire(raw))])
 
 
 @pytest.mark.parametrize("remove_plan", [False, True])

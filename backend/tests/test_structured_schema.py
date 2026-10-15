@@ -14,16 +14,17 @@ def test_strict_tool_schema_uses_only_supported_constraints():
             assert node.get("minItems", 0) in (0, 1)
             if node.get("type") == "object":
                 assert node["additionalProperties"] is False
+                assert len(node.get("properties", {})) <= 6
                 assert set(node["required"]) == set(node.get("properties", {}))
             for value in node.values():
                 verify(value)
 
     verify(schema)
-    timeframes = schema["properties"]["timeframe_context"]
+    timeframes = schema["properties"]["observations"]["properties"]["timeframe_context"]
     assert set(timeframes["required"]) == set(TIMEFRAMES)
     assert all(item["type"] == "string" for item in timeframes["properties"].values())
     assert schema["$defs"]["SourceReference"] == {"type": "string"}
-    assert schema["properties"]["conflicts"]["items"]["type"] == "string"
+    assert schema["properties"]["limitations"]["properties"]["conflicts"]["items"]["type"] == "string"
     # API grammar compatibility does not relax backend business validation.
     assert Analysis.model_json_schema()["properties"]["summary"]["minLength"] == 10
     assert Analysis.model_json_schema()["$defs"]["Zone"]["properties"]["low"]["exclusiveMinimum"] == 0

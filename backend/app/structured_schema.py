@@ -3,6 +3,7 @@ from copy import deepcopy
 
 from .schemas import Analysis, TIMEFRAMES
 from .target_anchors import AnchoredTarget
+from .analysis_contract import ANALYSIS_GROUPS, PLAN_GROUPS, group_properties
 
 
 UNSUPPORTED_CONSTRAINTS = {
@@ -32,6 +33,13 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
                         ("TradePlan", "confirmation_source_ids")):
         schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
     schema["$defs"]["TargetAnchor"]["properties"]["candle_id"] = {"$ref": "#/$defs/SourceReference"}
+    # A flat TradePlan has 15 fields and Analysis has 13. The provider's strict
+    # compiler rejects that combined grammar even without numeric constraints.
+    # Group the same fields into objects of at most six keys. Public/persisted
+    # schemas remain unchanged; unpack_grouped_analysis moves fields losslessly.
+    schema["properties"] = group_properties(schema["properties"], ANALYSIS_GROUPS, ("scenarios", "trade_plan"))
+    plan = schema["$defs"]["TradePlan"]
+    plan["properties"] = group_properties(plan["properties"], PLAN_GROUPS, ("targets",))
 
     def transform(node):
         if isinstance(node, list):

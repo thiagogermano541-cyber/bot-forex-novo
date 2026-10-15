@@ -16,6 +16,21 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 from app.schemas import Candle, Quote, Snapshot, TIMEFRAMES
 
 
+def as_wire(raw):
+    """Model-response fixture, using the real strict tool's grouped transport."""
+    from copy import deepcopy
+    from app.analysis_contract import ANALYSIS_GROUPS, PLAN_GROUPS
+    raw = deepcopy(raw)
+    result = {name: {key: raw[key] for key in keys} for name, keys in ANALYSIS_GROUPS.items()}
+    result["scenarios"] = raw["scenarios"]
+    plan = raw.get("trade_plan")
+    if isinstance(plan, dict) and plan:
+        plan = {**{name: {key: plan[key] for key in keys} for name, keys in PLAN_GROUPS.items()},
+                "targets": plan["targets"]}
+    result["trade_plan"] = plan
+    return result
+
+
 @pytest.fixture
 def snapshot():
     now = datetime(2026, 10, 14, 12, 30, 30, tzinfo=timezone.utc)

@@ -10,6 +10,7 @@ from .schemas import Analysis, Snapshot
 from .structured_schema import analysis_tool_schema
 from .market_context import prepare_market
 from .target_anchors import resolve_target_anchors
+from .analysis_contract import unpack_grouped_analysis
 from .schemas import TIMEFRAMES
 
 log = structlog.get_logger()
@@ -68,6 +69,9 @@ Para direção, forneça zonas e invalidação numérica coerente com preço de 
 Não garanta lucro. Todas as análises são experimentais até avaliação independente.
 Compare a memória anterior com os dados atuais; fatos passados não são fatos atuais.
 Use exclusivamente a ferramenta submit_analysis, que apenas retorna JSON validado.
+O JSON da ferramenta agrupa os campos em conclusion, observations, limitations, scenarios e trade_plan.
+decision fica em conclusion.decision. Um plano usa position, levels, trigger, targets e expiry.
+Esses grupos apenas organizam a resposta; todos os requisitos analíticos continuam iguais.
 Seja conciso. Summary até 80 palavras; justification até 120 palavras.
 No máximo 6 evidências, 4 zonas, 3 riscos, 2 alvos e 3 condições por cenário.
 Cada timeframe_context até 35 palavras e cada tese até 60 palavras.
@@ -196,8 +200,10 @@ class ClaudeClient:
             if response.stop_reason != "tool_use" or len(blocks) != 1:
                 raise InvalidClaudeResponse(metadata, reason=f"Resposta incompleta: {response.stop_reason}")
             validation_stage = "structured_response"
+            decoded_input = None
             try:
-                analysis = Analysis.model_validate(resolve_target_anchors(blocks[0].input, supplied))
+                decoded_input = unpack_grouped_analysis(blocks[0].input)
+                analysis = Analysis.model_validate(resolve_target_anchors(decoded_input, supplied))
                 validation_stage = "current_context_references"
                 analysis.validate_grounding(supplied)
                 # Preserve provider identifiers in the immutable audit snapshot.
@@ -226,7 +232,7 @@ class ClaudeClient:
                 # Regenerate against the SAME immutable snapshot. Repeating the
                 # entire rejected answer wasted thousands of input tokens and
                 # could prevent the single permitted review from fitting.
-                raw = block.input if isinstance(block.input, dict) else {}
+                raw = decoded_input if isinstance(decoded_input, dict) else {}
                 raw_plan = raw.get("trade_plan")
                 plan = {k: raw_plan[k] for k in ("side", "status", "timeframe", "entry_low", "entry_high", "stop_loss", "targets")
                         if k in raw_plan} if isinstance(raw_plan, dict) else None

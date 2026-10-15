@@ -1,3 +1,4 @@
+from conftest import as_wire
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -85,7 +86,7 @@ async def test_one_review_can_repair_all_issues_and_keep_a_grounded_pending_plan
     corrected = deepcopy(raw)
     corrected["decision"] = "AGUARDAR"  # Comes from the model's second response.
     responses = [SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-        content=[SimpleNamespace(type="tool_use", id=f"test_{i}", name="submit_analysis", input=value)])
+        content=[SimpleNamespace(type="tool_use", id=f"test_{i}", name="submit_analysis", input=as_wire(value))])
         for i, value in enumerate((raw, corrected))]
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(side_effect=responses)
@@ -113,7 +114,7 @@ async def test_unrepaired_response_is_never_relabelled_or_published(snapshot, wa
     for scenario in raw["scenarios"]:
         scenario["evidence_ids"] = ["M1_C30"]
     response = SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-        content=[SimpleNamespace(type="tool_use", id="bad_response", name="submit_analysis", input=raw)])
+        content=[SimpleNamespace(type="tool_use", id="bad_response", name="submit_analysis", input=as_wire(raw))])
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=response)
     try:

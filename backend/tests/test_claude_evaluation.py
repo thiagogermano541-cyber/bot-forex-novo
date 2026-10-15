@@ -1,3 +1,4 @@
+from conftest import as_wire
 from datetime import timedelta
 import json
 from types import SimpleNamespace
@@ -21,7 +22,7 @@ async def test_claude_uses_official_contract_and_grounding(snapshot, wait_analys
     for scenario in aliased.scenarios:
         scenario.evidence_ids = ["M1_C30"]
     create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-                       content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=aliased.model_dump(mode="json"))]))
+                       content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=as_wire(aliased.model_dump(mode="json")))]))
     client.client.messages.count_tokens = count
     client.client.messages.create = create
     budget = SimpleNamespace(reserve=AsyncMock(), settle=AsyncMock())
@@ -59,7 +60,7 @@ async def test_claude_revises_rejected_decision_and_accounts_both_calls(snapshot
     rejected["decision"] = "CENÁRIO DE ALTA"
     rejected["missing_data"] = ["Confirmação ausente"]
     responses = [SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-                 content=[SimpleNamespace(type="tool_use", id=f"tool_test_{index}", name="submit_analysis", input=value)])
+                 content=[SimpleNamespace(type="tool_use", id=f"tool_test_{index}", name="submit_analysis", input=as_wire(value))])
                  for index, value in enumerate((rejected, accepted.model_dump(mode="json")))]
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(side_effect=responses)
@@ -117,7 +118,7 @@ async def test_confirmed_plan_keeps_original_provider_references(snapshot, confi
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use",
         usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-        content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=raw)]))
+        content=[SimpleNamespace(type="tool_use", name="submit_analysis", input=as_wire(raw))]))
     result, metadata = await client.analyze(snapshot, [])
     assert result.trade_plan.confirmation_source_ids == [snapshot.candles["M1"][-1].id]
     assert result.trade_plan.targets[0].source_ids == [snapshot.candles["H1"][-1].id]
