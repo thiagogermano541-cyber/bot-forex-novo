@@ -115,6 +115,7 @@ async def test_confirmed_plan_keeps_original_provider_references(snapshot, confi
     raw["trade_plan"]["confirmation_source_ids"] = ["M1_C30"]
     raw["trade_plan"]["targets"] = [{"anchor": {"candle_id": "H1_C30", "field": "high"},
                                     "rationale": "Máxima observada no candle de H1."}]
+    raw["narrative_sources"] = {"summary": ["M1_C30"], "timeframe:H1": ["H1_C30"]}
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use",
         usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
@@ -122,6 +123,8 @@ async def test_confirmed_plan_keeps_original_provider_references(snapshot, confi
     result, metadata = await client.analyze(snapshot, [])
     assert result.trade_plan.confirmation_source_ids == [snapshot.candles["M1"][-1].id]
     assert result.trade_plan.targets[0].source_ids == [snapshot.candles["H1"][-1].id]
+    assert result.narrative_sources == {"summary": [snapshot.candles["M1"][-1].id],
+                                        "timeframe:H1": [snapshot.candles["H1"][-1].id]}
     assert metadata["context_candles"] == dict.fromkeys(snapshot.candles, 30)
     await client.client.close()
 

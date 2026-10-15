@@ -24,9 +24,9 @@ def as_wire(raw):
     def row(section, strings=(), numbers=(), sources=()):
         rows.append(dict(section=section, strings=list(strings), numbers=list(numbers), sources=list(sources)))
     for section, key in (("SUMMARY", "summary"), ("JUSTIFICATION", "justification"), ("CHANGE", "change_from_previous")):
-        row(section, [raw[key]])
+        row(section, [raw[key]], sources=raw.get("narrative_sources", {}).get(key, []))
     for section, key in (("CONFLICTS", "conflicts"), ("RISKS", "risks"), ("MISSING_DATA", "missing_data")):
-        row(section, raw[key])
+        row(section, raw[key], sources=raw.get("narrative_sources", {}).get(key, []))
     for item in raw["evidence"]:
         row("EVIDENCE", [item["category"], item["description"]], sources=item["source_ids"])
     for item in raw["zones"]:
@@ -35,7 +35,7 @@ def as_wire(raw):
         row("SCENARIO", [item["direction"], item["thesis"], item["invalidation"], *item["confirmation"]],
             [] if item["invalidation_price"] is None else [item["invalidation_price"]], item["evidence_ids"])
     for timeframe, text in raw["timeframe_context"].items():
-        row("TIMEFRAME", [timeframe, text])
+        row("TIMEFRAME", [timeframe, text], sources=raw.get("narrative_sources", {}).get(f"timeframe:{timeframe}", []))
     result = dict(decision=raw["decision"], rows=rows)
     plan = raw.get("trade_plan")
     if plan is not None:
@@ -46,7 +46,7 @@ def as_wire(raw):
             [plan[k] for k in ("entry_low", "entry_high", "stop_loss", "valid_for_minutes")], plan["confirmation_source_ids"])
         for target in plan["targets"]:
             row("TARGET", [target["anchor"]["field"], target["rationale"]], sources=[target["anchor"]["candle_id"]])
-        row("CANCEL", plan["cancel_if"])
+        row("CANCEL", plan["cancel_if"], sources=raw.get("narrative_sources", {}).get("cancel_if", []))
     return result
 
 

@@ -71,6 +71,7 @@ Compare a memória anterior com os dados atuais; fatos passados não são fatos 
 Use exclusivamente a ferramenta submit_analysis, que apenas retorna JSON validado.
 O transporte da ferramenta tem APENAS decision e rows. Cada row tem section, strings, numbers, sources.
 A semântica da análise é a mesma. Colunas exatas por section (demais arrays ficam vazios):
+sources pode citar IDs do snapshot em QUALQUER section; essas referências serão preservadas e validadas.
 SUMMARY: strings=[summary]. JUSTIFICATION: strings=[justification]. CHANGE: strings=[change_from_previous].
 CONFLICTS, RISKS, MISSING_DATA: strings=lista correspondente. Uma row de cada uma dessas seis sections é obrigatória, mesmo lista vazia.
 EVIDENCE: strings=[categoria, descrição], sources=IDs. ZONE: strings=[tipo, explicação], numbers=[low,high], sources=IDs.
@@ -222,6 +223,8 @@ class ClaudeClient:
                     zone.source_ids = [references.get(ref, ref) for ref in zone.source_ids]
                 for scenario in analysis.scenarios:
                     scenario.evidence_ids = [references.get(ref, ref) for ref in scenario.evidence_ids]
+                analysis.narrative_sources = {key: [references.get(ref, ref) for ref in ids]
+                                              for key, ids in analysis.narrative_sources.items()}
                 if analysis.trade_plan:
                     analysis.trade_plan.confirmation_source_ids = [references.get(ref, ref) for ref in analysis.trade_plan.confirmation_source_ids]
                     for target in analysis.trade_plan.targets:
@@ -235,7 +238,7 @@ class ClaudeClient:
                     reason = str(exc)
                 reason = f"{validation_stage}: {reason}"
                 if attempt == MAX_ANALYSIS_ATTEMPTS:
-                    raise InvalidClaudeResponse(metadata, reason=reason) from exc
+                    raise InvalidClaudeResponse(metadata, reason=reason, payload=blocks[0].input) from exc
                 log.warning("claude_revision_requested", asset=snapshot.asset, reason=reason, attempt=attempt)
                 block = blocks[0]
                 # Regenerate against the SAME immutable snapshot. Repeating the
@@ -259,7 +262,8 @@ class ClaudeClient:
 
 
 class InvalidClaudeResponse(Exception):
-    def __init__(self, usage, reason=""):
+    def __init__(self, usage, reason="", payload=None):
         self.usage = usage
         self.reason = reason
+        self.payload = payload
         super().__init__("Claude não concluiu uma análise consistente após a revisão. Nenhum novo sinal foi emitido.")

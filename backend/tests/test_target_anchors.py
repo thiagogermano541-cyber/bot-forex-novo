@@ -118,8 +118,9 @@ async def test_unrepaired_response_is_never_relabelled_or_published(snapshot, wa
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=response)
     try:
-        with pytest.raises(InvalidClaudeResponse, match="análise consistente"):
+        with pytest.raises(InvalidClaudeResponse, match="análise consistente") as error:
             await client.analyze(snapshot, [])
+        assert error.value.payload == as_wire(raw)
         assert client.client.messages.create.call_count == 2
     finally:
         await client.client.close()

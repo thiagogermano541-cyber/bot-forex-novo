@@ -42,3 +42,32 @@ def test_transport_never_discards_invalid_rows_or_interprets_plan_text(wait_anal
         wire["rows"][0]["numbers"] = [1]
     with pytest.raises(ValueError):
         unpack_analysis(wire)
+
+
+def test_real_summary_and_timeframe_citations_are_preserved_and_validated(snapshot, wait_analysis):
+    raw = wait_analysis.model_dump(mode="json")
+    raw["narrative_sources"] = {"summary": [c.id for c in snapshot.candles["M1"][-5:]],
+                                "timeframe:H1": [snapshot.candles["H1"][-1].id]}
+    decoded = unpack_analysis(as_wire(raw))
+    assert decoded["narrative_sources"] == raw["narrative_sources"]
+    assert Analysis.model_validate(decoded).validate_grounding(snapshot).decision == "AGUARDAR"
+    decoded["narrative_sources"]["summary"].append("M1_C99")
+    with pytest.raises(ValueError, match="unknown evidence"):
+        Analysis.model_validate(decoded).validate_grounding(snapshot)
+
+
+def test_narrative_citations_never_replace_observed_directional_evidence(snapshot, confirmed_buy):
+    confirmed_buy.evidence = confirmed_buy.evidence[:1]
+    confirmed_buy.narrative_sources = {"timeframe:H1": [snapshot.candles["H1"][-1].id]}
+    with pytest.raises(ValueError, match="higher and a lower timeframe"):
+        confirmed_buy.validate_grounding(snapshot)
+
+
+def test_all_independent_row_shape_errors_are_reported_together(wait_analysis):
+    wire = as_wire(wait_analysis.model_dump(mode="json"))
+    wire["rows"][0]["numbers"] = [1]
+    next(row for row in wire["rows"] if row["section"] == "TIMEFRAME")["strings"] = ["M1"]
+    with pytest.raises(ValueError) as error:
+        unpack_analysis(wire)
+    assert "SUMMARY: wrong column counts" in str(error.value)
+    assert "TIMEFRAME: wrong column counts" in str(error.value)

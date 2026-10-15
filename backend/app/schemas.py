@@ -218,6 +218,7 @@ class Analysis(StrictModel):
     risks: list[str] = Field(min_length=1)
     missing_data: list[str]
     change_from_previous: str
+    narrative_sources: dict[str, list[str]] = Field(default_factory=dict)
     trade_plan: TradePlan | None = Field(default=None, description="Objeto TradePlan ou null JSON literal quando não há plano defensável. Nunca string, lista, {} ou texto 'null'.")
 
     def validate_grounding(self, snapshot: Snapshot):
@@ -229,6 +230,7 @@ class Analysis(StrictModel):
         references = [i for e in self.evidence for i in e.source_ids]
         references += [i for z in self.zones for i in z.source_ids]
         references += [i for s in self.scenarios for i in s.evidence_ids]
+        references += [i for ids in self.narrative_sources.values() for i in ids]
         plan = self.trade_plan
         if plan:
             references += plan.confirmation_source_ids
