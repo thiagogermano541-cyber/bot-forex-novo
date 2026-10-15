@@ -175,16 +175,34 @@ class TradePlan(StrictModel):
 
     @model_validator(mode="after")
     def geometry(self):
+        errors = []
         if self.entry_high < self.entry_low:
-            raise ValueError("Inverted entry region")
+            errors.append(f"Inverted entry region: entry_low={self.entry_low}, entry_high={self.entry_high}")
         prices = [target.price for target in self.targets]
         if self.side == "COMPRA":
-            if self.stop_loss >= self.entry_low or any(p <= self.entry_high for p in prices) or prices != sorted(set(prices)):
-                raise ValueError("Buy plan requires stop below entry and increasing targets above entry")
-        elif self.stop_loss <= self.entry_high or any(p >= self.entry_low for p in prices) or prices != sorted(set(prices), reverse=True):
-            raise ValueError("Sell plan requires stop above entry and decreasing targets below entry")
+            if self.stop_loss >= self.entry_low:
+                errors.append(f"COMPRA requires stop_loss < entry_low: {self.stop_loss} >= {self.entry_low}")
+            for index, target in enumerate(self.targets):
+                if target.price <= self.entry_high:
+                    errors.append(f"COMPRA targets[{index}] resolves to {target.price} from {target.source_ids}; "
+                                  f"must be > entry_high={self.entry_high}")
+            if prices != sorted(prices):
+                errors.append(f"COMPRA targets must be increasing; resolved prices={prices}")
+        else:
+            if self.stop_loss <= self.entry_high:
+                errors.append(f"VENDA requires stop_loss > entry_high: {self.stop_loss} <= {self.entry_high}")
+            for index, target in enumerate(self.targets):
+                if target.price >= self.entry_low:
+                    errors.append(f"VENDA targets[{index}] resolves to {target.price} from {target.source_ids}; "
+                                  f"must be < entry_low={self.entry_low}")
+            if prices != sorted(prices, reverse=True):
+                errors.append(f"VENDA targets must be decreasing; resolved prices={prices}")
+        if len(set(prices)) != len(prices):
+            errors.append(f"Targets resolve to duplicate prices={prices}; choose distinct levels or keep one target")
         if self.status == "CONFIRMADO" and not self.confirmation_source_ids:
-            raise ValueError("Confirmed setup requires observed confirmation sources")
+            errors.append("Confirmed setup requires observed confirmation sources")
+        if errors:
+            raise ValueError("; ".join(errors))
         return self
 
 
@@ -200,7 +218,7 @@ class Analysis(StrictModel):
     risks: list[str] = Field(min_length=1)
     missing_data: list[str]
     change_from_previous: str
-    trade_plan: TradePlan | None = None
+    trade_plan: TradePlan | None = Field(default=None, description="Objeto TradePlan ou null JSON literal quando não há plano defensável. Nunca string, lista, {} ou texto 'null'.")
 
     def validate_grounding(self, snapshot: Snapshot):
         # Report all independent problems in one pass so a bounded model review

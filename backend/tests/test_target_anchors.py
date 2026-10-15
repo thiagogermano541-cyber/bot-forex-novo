@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -94,7 +95,7 @@ async def test_one_review_can_repair_all_issues_and_keep_a_grounded_pending_plan
         assert result.trade_plan.status == "PENDENTE"
         assert result.trade_plan.targets[0].price == snapshot.candles["H1"][-1].high
         assert result.trade_plan.targets[0].source_ids == [snapshot.candles["H1"][-1].id]
-        feedback = client.client.messages.create.call_args.kwargs["messages"][-1]["content"][0]["content"]
+        feedback = json.loads(client.client.messages.create.call_args.kwargs["messages"][-1]["content"])["validation_review"]["validation_errors"]
         assert "matching CONFIRMADO" in feedback
         assert "outside entry region" in feedback
         assert "match the selected scenario" in feedback
@@ -116,7 +117,7 @@ async def test_unrepaired_response_is_never_relabelled_or_published(snapshot, wa
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=response)
     try:
-        with pytest.raises(InvalidClaudeResponse, match="JSON inválido"):
+        with pytest.raises(InvalidClaudeResponse, match="análise consistente"):
             await client.analyze(snapshot, [])
         assert client.client.messages.create.call_count == 2
     finally:

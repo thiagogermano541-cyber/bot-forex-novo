@@ -7,7 +7,7 @@ from .target_anchors import AnchoredTarget
 
 UNSUPPORTED_CONSTRAINTS = {
     "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-    "minLength", "maxLength", "maxItems", "uniqueItems", "minProperties", "maxProperties",
+    "minLength", "maxLength", "minItems", "maxItems", "uniqueItems", "minProperties", "maxProperties",
 }
 
 
@@ -24,14 +24,10 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
         "required": list(TIMEFRAMES),
         "additionalProperties": False,
     }
-    # Expanding hundreds of IDs at every citation field makes the strict
-    # grammar too large. Keep a compact format constraint for large contexts;
-    # validate the exact whitelist against the supplied snapshot in Python.
+    # Keep a stable, small grammar for ALL snapshots. Repeated source enums,
+    # regexes and array bounds explode the provider's compiled grammar. Exact
+    # source whitelists and every business constraint stay enforced in Python.
     schema["$defs"]["SourceReference"] = {"type": "string"}
-    if len(source_ids) <= 128:
-        schema["$defs"]["SourceReference"]["enum"] = sorted(source_ids)
-    else:
-        schema["$defs"]["SourceReference"]["pattern"] = "^((M1|M5|M15|M30|H1|H4)_C[0-9]{2}|TRADE_[0-9]{2}|Q_CURRENT|BOOK_CURRENT)$"
     for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids"),
                         ("TradePlan", "confirmation_source_ids")):
         schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
@@ -42,12 +38,9 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
             return [transform(value) for value in node]
         if not isinstance(node, dict):
             return node
-        removed = {key: value for key, value in node.items() if key in UNSUPPORTED_CONSTRAINTS
-                   or (key == "minItems" and value not in (0, 1))}
+        removed = {key: value for key, value in node.items()
+                   if key in UNSUPPORTED_CONSTRAINTS or key in {"title", "default"}}
         result = {key: transform(value) for key, value in node.items() if key not in removed}
-        if removed:
-            constraints = "; ".join(f"{key}={value}" for key, value in removed.items())
-            result["description"] = (result.get("description", "") + f" Backend validation: {constraints}.").strip()
         if result.get("type") == "object":
             result["additionalProperties"] = False
             result["required"] = list(result.get("properties", {}))

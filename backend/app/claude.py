@@ -43,10 +43,17 @@ Essas decisões exigem status CONFIRMADO, cotação de referência dentro da fai
 confirmação citando o último candle fechado do período escolhido e evidências OBSERVADO
 em pelo menos um período H1/H4 e um período menor. Stop igual à invalidação do cenário escolhido.
 Alvos de COMPRA devem subir acima da entrada; VENDA devem descer abaixo; sem alvos duplicados.
+Antes de enviar, leia o preço EXATO de cada anchor no candle e verifique a cadeia completa:
+COMPRA: stop_loss < entry_low <= entry_high < alvo1 < alvo2.
+VENDA: stop_loss > entry_high >= entry_low > alvo1 > alvo2.
+Candles diferentes podem ter a mesma máxima/mínima: isso NÃO são dois alvos distintos.
+Use um único alvo se só existir uma região sustentada. Não altere preços observados para caber no plano.
 Se o gatilho depende de evento futuro, use trade_plan PENDENTE e decision="AGUARDAR",
 mesmo quando a tendência favorecer alta ou baixa. Tendência não equivale a entrada confirmada.
 Exemplo de consistência: viés de baixa + aguardar rompimento = AGUARDAR com plano PENDENTE.
-Se não houver setup defensável, trade_plan=null. Nunca force um plano para preencher campos.
+Se não houver setup defensável, trade_plan=null (null JSON literal, sem aspas).
+trade_plan deve ser um objeto ou null, nunca uma string, lista vazia ou texto descritivo.
+Nunca force um plano para preencher campos.
 Níveis de entrada/stop/alvos são propostas experimentais; não preços futuros conhecidos.
 O prazo valid_for_minutes deve ser 1 a 60, coerente com o período; não trate plano vencido como atual.
 Não use porcentagem de acerto ou confiança numérica. Risco/retorno é projetado e não assegura resultado.
@@ -112,7 +119,6 @@ class ClaudeClient:
         self.config = config
         self.client = AsyncAnthropic(api_key=config.anthropic_api_key.get_secret_value() or "unconfigured",
                                      max_retries=0, timeout=120)
-        self.strict_schema_unavailable = False
 
     async def analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         try:
@@ -132,7 +138,7 @@ class ClaudeClient:
             prepared = prepare_market(snapshot, memory, limits)
             messages = [{"role": "user", "content": json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":"))}]
             tool = {"name": "submit_analysis", "description": "Retorna análise e plano experimental sustentados pelo snapshot.",
-                    "strict": not self.strict_schema_unavailable, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
+                    "strict": True, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
             count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                             messages=messages, tools=[tool])
             if count.input_tokens <= self.config.claude_input_token_limit - min(4096, self.config.claude_max_tokens):
@@ -163,35 +169,18 @@ class ClaudeClient:
                         raise InvalidClaudeResponse(metadata, reason=str(exc)) from exc
                     raise
             log.info("claude_request_started", asset=snapshot.asset, input_tokens=count.input_tokens,
-                     max_output_tokens=self.config.claude_max_tokens, attempt=attempt)
-            while True:
-                try:
-                    response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
-                                                                 messages=messages, tools=[tool],
-                                                                 tool_choice={"type": "tool", "name": "submit_analysis"},
-                                                                 max_tokens=self.config.claude_max_tokens)
-                except Exception as exc:
-                    # Rejected requests have no generated tokens. Network timeouts
-                    # retain the reservation because provider usage is unknown.
-                    if budget is not None and 400 <= getattr(exc, "status_code", 0) < 500 and getattr(exc, "status_code", 0) != 408:
-                        await budget.settle(0)
-                    body = getattr(exc, "body", {})
-                    error = body.get("error", body) if isinstance(body, dict) else {}
-                    reason = str(error.get("message", "")).lower() if isinstance(error, dict) else ""
-                    compilation_limit = "grammar" in reason and any(word in reason for word in ("too large", "complex", "compilation"))
-                    if getattr(exc, "status_code", 0) == 400 and tool["strict"] and compilation_limit:
-                        # The rejected request consumed no inference tokens. Keep
-                        # official JSON tool output and every backend validation;
-                        # only provider-side grammar enforcement is disabled.
-                        self.strict_schema_unavailable = True
-                        tool = {**tool, "strict": False}
-                        log.warning("claude_grammar_fallback", asset=snapshot.asset,
-                                    backend_validation="Pydantic + exact snapshot grounding")
-                        if budget is not None:
-                            await budget.reserve()
-                        continue
-                    raise
-                break
+                     max_output_tokens=self.config.claude_max_tokens, attempt=attempt, strict_output=tool["strict"])
+            try:
+                response = await self.client.messages.create(model=self.config.claude_model, system=SYSTEM_PROMPT,
+                                                             messages=messages, tools=[tool],
+                                                             tool_choice={"type": "tool", "name": "submit_analysis"},
+                                                             max_tokens=self.config.claude_max_tokens)
+            except Exception as exc:
+                # Rejected requests have no generated tokens. Network timeouts
+                # retain the reservation because provider usage is unknown.
+                if budget is not None and 400 <= getattr(exc, "status_code", 0) < 500 and getattr(exc, "status_code", 0) != 408:
+                    await budget.settle(0)
+                raise
             usage = response.usage
             log.info("claude_response_received", asset=snapshot.asset, stop_reason=response.stop_reason,
                      input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, attempt=attempt)
@@ -234,16 +223,21 @@ class ClaudeClient:
                     raise InvalidClaudeResponse(metadata, reason=reason) from exc
                 log.warning("claude_revision_requested", asset=snapshot.asset, reason=reason, attempt=attempt)
                 block = blocks[0]
-                messages.extend([
-                    {"role": "assistant", "content": [{"type": "tool_use", "id": block.id,
-                        "name": "submit_analysis", "input": block.input}]},
-                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": block.id,
-                        "is_error": True, "content": "Validação recusou a análise: " + reason +
-                        ". Corrija TODOS os problemas listados de uma vez usando exclusivamente o snapshot original. "
-                        "Os alvos devem usar anchor={candle_id,field: high ou low}, sem price/source_ids. "
-                        "A própria IA deve decidir novamente. Se faltar confirmação ou dado essencial, "
-                        "escolha AGUARDAR ou DADOS INSUFICIENTES. Limitações opcionais ficam em risks."}]},
-                ])
+                # Regenerate against the SAME immutable snapshot. Repeating the
+                # entire rejected answer wasted thousands of input tokens and
+                # could prevent the single permitted review from fitting.
+                raw = block.input if isinstance(block.input, dict) else {}
+                raw_plan = raw.get("trade_plan")
+                plan = {k: raw_plan[k] for k in ("side", "status", "timeframe", "entry_low", "entry_high", "stop_loss", "targets")
+                        if k in raw_plan} if isinstance(raw_plan, dict) else None
+                review = {"instruction": "Corrija TODOS os problemas usando exclusivamente o snapshot original. "
+                          "A própria IA deve decidir novamente. Verifique os preços EXATOS dos anchors e as desigualdades. "
+                          "Alvos devem ser distintos, ordenados e usar anchor={candle_id,field: high ou low}, sem price/source_ids. "
+                          "Sem plano defensável, trade_plan deve ser null JSON literal, nunca string ou lista. "
+                          "Sem confirmação, escolha AGUARDAR. Limitações opcionais ficam em risks.",
+                          "validation_errors": reason, "previous_decision": raw.get("decision"),
+                          "previous_plan_type": type(raw_plan).__name__, "rejected_plan": plan}
+                messages = [messages[0], {"role": "user", "content": json.dumps({"validation_review": review}, ensure_ascii=False)}]
                 continue
             return analysis, metadata
 
@@ -253,4 +247,4 @@ class InvalidClaudeResponse(Exception):
     def __init__(self, usage, reason=""):
         self.usage = usage
         self.reason = reason
-        super().__init__("Claude retornou JSON inválido ou evidências inconsistentes")
+        super().__init__("Claude não concluiu uma análise consistente após a revisão. Nenhum novo sinal foi emitido.")

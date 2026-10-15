@@ -45,9 +45,9 @@ def wait_analysis(snapshot):
 
 @pytest.fixture
 def confirmed_buy(snapshot, wait_analysis):
-    from app.schemas import Evidence, TradePlan, Zone
+    from app.schemas import Decision, Evidence, TradePlan, Zone
     analysis = wait_analysis.model_copy(deep=True)
-    analysis.decision = "CENÁRIO DE ALTA"
+    analysis.decision = Decision.BULL
     source = snapshot.candles["M1"][-1].id
     higher = snapshot.candles["H1"][-1].id
     analysis.evidence.append(Evidence(category="OBSERVADO", description="Região observada no período maior.", source_ids=[higher]))

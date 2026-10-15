@@ -1,4 +1,5 @@
 from datetime import timedelta
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -67,9 +68,10 @@ async def test_claude_revises_rejected_decision_and_accounts_both_calls(snapshot
     assert client.client.messages.create.call_count == 2
     assert usage["input_tokens"] == 2000
     assert usage["cost_usd"] == pytest.approx(0.003)
-    feedback = client.client.messages.create.call_args.kwargs["messages"][-1]["content"][0]
-    assert feedback["type"] == "tool_result" and feedback["is_error"] is True
-    assert "empty missing_data" in feedback["content"]
+    messages = client.client.messages.create.call_args.kwargs["messages"]
+    feedback = json.loads(messages[-1]["content"])["validation_review"]
+    assert len(messages) == 2
+    assert "empty missing_data" in feedback["validation_errors"]
     await client.client.close()
 
 
