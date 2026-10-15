@@ -110,7 +110,8 @@ async def test_confirmed_plan_keeps_original_provider_references(snapshot, confi
     for scenario in raw["scenarios"]:
         scenario["evidence_ids"] = [aliases[i] for i in scenario["evidence_ids"]]
     raw["trade_plan"]["confirmation_source_ids"] = ["M1_C30"]
-    raw["trade_plan"]["targets"][0]["source_ids"] = ["H1_C30"]
+    raw["trade_plan"]["targets"] = [{"anchor": {"candle_id": "H1_C30", "field": "high"},
+                                    "rationale": "Máxima observada no candle de H1."}]
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=SimpleNamespace(stop_reason="tool_use",
         usage=SimpleNamespace(input_tokens=1000, output_tokens=100),

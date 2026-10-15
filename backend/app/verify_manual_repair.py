@@ -27,7 +27,7 @@ async def run_once(redis):
                             json={"email": cfg.admin_email, "password": cfg.admin_password.get_secret_value()})
                         login.raise_for_status()
                     config = await client.get(f"{origin}/api/config")
-                    if config.status_code == 200 and config.json().get("analysis_protocol_version") == 4:
+                    if config.status_code == 200 and config.json().get("analysis_protocol_version") == 5:
                         break
                 await asyncio.sleep(2)
             else:

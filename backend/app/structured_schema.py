@@ -2,6 +2,7 @@
 from copy import deepcopy
 
 from .schemas import Analysis, TIMEFRAMES
+from .target_anchors import AnchoredTarget
 
 
 UNSUPPORTED_CONSTRAINTS = {
@@ -12,6 +13,11 @@ UNSUPPORTED_CONSTRAINTS = {
 
 def analysis_tool_schema(source_ids: set[str]) -> dict:
     schema = deepcopy(Analysis.model_json_schema())
+    # Claude selects a candle extreme; the backend copies its exact observed
+    # price. This prevents a numeric target and its citation from disagreeing.
+    target_schema = AnchoredTarget.model_json_schema()
+    schema["$defs"].update(target_schema.pop("$defs"))
+    schema["$defs"]["SignalTarget"] = target_schema
     schema["properties"]["timeframe_context"] = {
         "type": "object",
         "properties": {tf: {"type": "string"} for tf in TIMEFRAMES},
@@ -27,8 +33,9 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
     else:
         schema["$defs"]["SourceReference"]["pattern"] = "^((M1|M5|M15|M30|H1|H4)_C[0-9]{2}|TRADE_[0-9]{2}|Q_CURRENT|BOOK_CURRENT)$"
     for name, field in (("Evidence", "source_ids"), ("Zone", "source_ids"), ("Scenario", "evidence_ids"),
-                        ("SignalTarget", "source_ids"), ("TradePlan", "confirmation_source_ids")):
+                        ("TradePlan", "confirmation_source_ids")):
         schema["$defs"][name]["properties"][field]["items"] = {"$ref": "#/$defs/SourceReference"}
+    schema["$defs"]["TargetAnchor"]["properties"]["candle_id"] = {"$ref": "#/$defs/SourceReference"}
 
     def transform(node):
         if isinstance(node, list):

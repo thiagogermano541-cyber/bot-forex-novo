@@ -9,6 +9,7 @@ from .config import Settings
 from .schemas import Analysis, Snapshot
 from .structured_schema import analysis_tool_schema
 from .market_context import prepare_market
+from .target_anchors import resolve_target_anchors
 from .schemas import TIMEFRAMES
 
 log = structlog.get_logger()
@@ -34,13 +35,17 @@ Um wick isolado não confirma rompimento; confirme o fechamento e a reação sub
 Livro pontual não comprova absorção, spoofing nem persistência de ordens. Não extrapole a exchange.
 Não persiga movimento fora da região de entrada. Distinga oportunidade potencial e confirmação atual.
 Ao propor trade_plan, forneça lado, setup, período, faixa de entrada, stop estrutural,
-alvos apoiados em regiões de candles citados, gatilho observável, prazo e condições de cancelamento.
-COMPRA/VENDA exige status CONFIRMADO, cotação de referência dentro da faixa de entrada,
+alvos escolhidos por anchor={candle_id,field}, gatilho observável, prazo e condições de cancelamento.
+Cada alvo deve selecionar um candle_id atual e field="high" ou "low". O backend copia o preço
+exato desse campo; não escreva price nem source_ids nos alvos. Escolha a região e justifique-a.
+decision="CENÁRIO DE ALTA" significa COMPRA; decision="CENÁRIO DE BAIXA" significa VENDA.
+Essas decisões exigem status CONFIRMADO, cotação de referência dentro da faixa de entrada,
 confirmação citando o último candle fechado do período escolhido e evidências OBSERVADO
 em pelo menos um período H1/H4 e um período menor. Stop igual à invalidação do cenário escolhido.
 Alvos de COMPRA devem subir acima da entrada; VENDA devem descer abaixo; sem alvos duplicados.
-Cada alvo deve estar dentro da máxima/mínima de algum candle citado por ele.
-Se o gatilho depende de evento futuro, use trade_plan PENDENTE e decisão AGUARDAR.
+Se o gatilho depende de evento futuro, use trade_plan PENDENTE e decision="AGUARDAR",
+mesmo quando a tendência favorecer alta ou baixa. Tendência não equivale a entrada confirmada.
+Exemplo de consistência: viés de baixa + aguardar rompimento = AGUARDAR com plano PENDENTE.
 Se não houver setup defensável, trade_plan=null. Nunca force um plano para preencher campos.
 Níveis de entrada/stop/alvos são propostas experimentais; não preços futuros conhecidos.
 O prazo valid_for_minutes deve ser 1 a 60, coerente com o período; não trate plano vencido como atual.
@@ -203,7 +208,7 @@ class ClaudeClient:
                 raise InvalidClaudeResponse(metadata, reason=f"Resposta incompleta: {response.stop_reason}")
             validation_stage = "structured_response"
             try:
-                analysis = Analysis.model_validate(blocks[0].input)
+                analysis = Analysis.model_validate(resolve_target_anchors(blocks[0].input, supplied))
                 validation_stage = "current_context_references"
                 analysis.validate_grounding(supplied)
                 # Preserve provider identifiers in the immutable audit snapshot.
@@ -234,7 +239,8 @@ class ClaudeClient:
                         "name": "submit_analysis", "input": block.input}]},
                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": block.id,
                         "is_error": True, "content": "Validação recusou a análise: " + reason +
-                        ". Reavalie e corrija a resposta usando exclusivamente o snapshot original. "
+                        ". Corrija TODOS os problemas listados de uma vez usando exclusivamente o snapshot original. "
+                        "Os alvos devem usar anchor={candle_id,field: high ou low}, sem price/source_ids. "
                         "A própria IA deve decidir novamente. Se faltar confirmação ou dado essencial, "
                         "escolha AGUARDAR ou DADOS INSUFICIENTES. Limitações opcionais ficam em risks."}]},
                 ])

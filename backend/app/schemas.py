@@ -161,7 +161,7 @@ class SignalTarget(StrictModel):
 
 class TradePlan(StrictModel):
     side: Literal["COMPRA", "VENDA"]
-    status: Literal["CONFIRMADO", "PENDENTE"]
+    status: Literal["CONFIRMADO", "PENDENTE"] = Field(description="PENDENTE exige decision=AGUARDAR; use CONFIRMADO somente com confirmação já observada.")
     setup_type: str = Field(min_length=5, max_length=200)
     timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4"]
     entry_low: float = Field(gt=0)
@@ -189,7 +189,7 @@ class TradePlan(StrictModel):
 
 
 class Analysis(StrictModel):
-    decision: Decision
+    decision: Decision = Field(description="CENÁRIO DE ALTA/BAIXA somente com plano correspondente CONFIRMADO; plano PENDENTE exige AGUARDAR, mesmo com viés direcional.")
     summary: str = Field(min_length=10, max_length=2500)
     justification: str = Field(min_length=10, max_length=3000)
     evidence: list[Evidence] = Field(max_length=18)
@@ -203,51 +203,65 @@ class Analysis(StrictModel):
     trade_plan: TradePlan | None = None
 
     def validate_grounding(self, snapshot: Snapshot):
+        # Report all independent problems in one pass so a bounded model review
+        # can repair the entire response rather than uncovering one error/call.
+        errors = []
         known = snapshot.evidence_ids()
+        candles_by_id = {c.id: c for rows in snapshot.candles.values() for c in rows}
         references = [i for e in self.evidence for i in e.source_ids]
         references += [i for z in self.zones for i in z.source_ids]
         references += [i for s in self.scenarios for i in s.evidence_ids]
-        if self.trade_plan:
-            references += self.trade_plan.confirmation_source_ids
-            references += [i for target in self.trade_plan.targets for i in target.source_ids]
+        plan = self.trade_plan
+        if plan:
+            references += plan.confirmation_source_ids
+            references += [i for target in plan.targets for i in target.source_ids]
         unknown = sorted(set(references) - known)
         if unknown:
-            raise ValueError(f"Claude cited unknown evidence: {unknown[:8]}")
+            errors.append(f"Claude cited unknown evidence: {unknown[:8]}")
         if self.decision != Decision.INSUFFICIENT:
             if {s.direction for s in self.scenarios} != {"ALTA", "BAIXA", "LATERAL"}:
-                raise ValueError("All three scenarios are required")
+                errors.append("All three scenarios are required")
             if set(self.timeframe_context) != set(TIMEFRAMES):
-                raise ValueError("All timeframes are required")
+                errors.append("All timeframes are required")
         if self.decision in (Decision.BULL, Decision.BEAR):
             direction = "ALTA" if self.decision == Decision.BULL else "BAIXA"
-            scenario = next(s for s in self.scenarios if s.direction == direction)
-            if not self.evidence or self.missing_data or not self.zones or not scenario.invalidation_price:
-                raise ValueError(f"Directional decision requires evidence, zones, empty missing_data and numeric invalidation: "
-                                 f"evidence={len(self.evidence)}, zones={len(self.zones)}, missing_data={self.missing_data}, "
-                                 f"invalidation_price={scenario.invalidation_price}")
-            midpoint = (snapshot.quote.bid + snapshot.quote.ask) / 2 if snapshot.quote else 0
-            if (direction == "ALTA" and scenario.invalidation_price >= midpoint) or (direction == "BAIXA" and scenario.invalidation_price <= midpoint):
-                raise ValueError("Invalidation is inconsistent with reference price")
-            plan = self.trade_plan
+            scenario = next((s for s in self.scenarios if s.direction == direction), None)
+            invalidation = scenario.invalidation_price if scenario else None
+            if not self.evidence or self.missing_data or not self.zones or not invalidation:
+                errors.append(f"Directional decision requires evidence, zones, empty missing_data and numeric invalidation: "
+                              f"evidence={len(self.evidence)}, zones={len(self.zones)}, missing_data={self.missing_data}, "
+                              f"invalidation_price={invalidation}")
+            midpoint = (snapshot.quote.bid + snapshot.quote.ask) / 2 if snapshot.quote else None
+            if midpoint is None:
+                errors.append("Directional decision requires a current reference quote")
+            elif invalidation and ((direction == "ALTA" and invalidation >= midpoint) or
+                                   (direction == "BAIXA" and invalidation <= midpoint)):
+                errors.append(f"Invalidation is inconsistent with reference price: invalidation={invalidation}, reference={midpoint}")
             if not plan or plan.status != "CONFIRMADO" or plan.side != ("COMPRA" if direction == "ALTA" else "VENDA"):
-                raise ValueError("Directional decision requires a matching CONFIRMADO trade_plan; pending setups must AGUARDAR")
-            candles_by_id = {c.id: c for rows in snapshot.candles.values() for c in rows}
+                errors.append("Directional decision requires a matching CONFIRMADO trade_plan; pending setups must AGUARDAR")
             observed_tfs = {candles_by_id[i].timeframe for e in self.evidence if e.category == "OBSERVADO"
                             for i in e.source_ids if i in candles_by_id}
             if not observed_tfs.intersection({"H1", "H4"}) or not observed_tfs.intersection({"M1", "M5", "M15", "M30"}):
-                raise ValueError("Directional decision requires observed candle evidence from a higher and a lower timeframe")
-            if snapshot.candles[plan.timeframe][-1].id not in plan.confirmation_source_ids:
-                raise ValueError("Confirmation must cite the latest closed candle in the plan timeframe")
-            if not plan.entry_low <= midpoint <= plan.entry_high:
-                raise ValueError("Current reference price is outside entry region; wait rather than chase price")
-            if abs(plan.stop_loss - scenario.invalidation_price) > 0.01:
-                raise ValueError("Stop loss must match the selected scenario invalidation_price")
-        elif self.trade_plan and self.trade_plan.status == "CONFIRMADO":
-            raise ValueError("AGUARDAR or insufficient data cannot describe a confirmed entry")
-        if self.trade_plan:
-            candles_by_id = {c.id: c for rows in snapshot.candles.values() for c in rows}
-            for target in self.trade_plan.targets:
-                if not any(i in candles_by_id and candles_by_id[i].low <= target.price <= candles_by_id[i].high
-                           for i in target.source_ids):
-                    raise ValueError("Each target must lie within the observed price region of a cited closed candle")
+                errors.append("Directional decision requires observed candle evidence from a higher and a lower timeframe")
+            if plan:
+                rows = snapshot.candles.get(plan.timeframe, [])
+                if not rows or rows[-1].id not in plan.confirmation_source_ids:
+                    latest = rows[-1].id if rows else "unavailable"
+                    errors.append(f"Confirmation must cite the latest closed candle in the plan timeframe: {plan.timeframe}={latest}")
+                if midpoint is not None and not plan.entry_low <= midpoint <= plan.entry_high:
+                    errors.append(f"Current reference price is outside entry region; wait rather than chase price: "
+                                  f"reference={midpoint}, entry=[{plan.entry_low},{plan.entry_high}]")
+                if invalidation and abs(plan.stop_loss - invalidation) > 0.01:
+                    errors.append(f"Stop loss must match the selected scenario invalidation_price: stop={plan.stop_loss}, invalidation={invalidation}")
+        elif plan and plan.status == "CONFIRMADO":
+            errors.append("AGUARDAR or insufficient data cannot describe a confirmed entry")
+        if plan:
+            for index, target in enumerate(plan.targets):
+                cited = [candles_by_id[i] for i in target.source_ids if i in candles_by_id]
+                if not any(c.low <= target.price <= c.high for c in cited):
+                    ranges = [(c.id, c.low, c.high) for c in cited]
+                    errors.append(f"Each target must lie within the observed price region of a cited closed candle: "
+                                  f"targets[{index}]={target.price}, cited_ranges={ranges}")
+        if errors:
+            raise ValueError("; ".join(errors))
         return self
