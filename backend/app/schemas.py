@@ -131,7 +131,7 @@ class Evidence(StrictModel):
 
 
 class Zone(StrictModel):
-    kind: Literal["COMPRADORES", "VENDEDORES", "LIQUIDEZ POTENCIAL"]
+    kind: str = Field(min_length=3, max_length=80, description="Rótulo analítico da IA: compradores, vendedores, suporte, resistência, FVG ou outra estrutura fundamentada.")
     low: float = Field(gt=0)
     high: float = Field(gt=0)
     explanation: str

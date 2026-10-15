@@ -113,7 +113,7 @@ class AnalysisService:
                         log.warning("claude_response_rejected", asset=asset, reason=exc.reason,
                                     input_tokens=exc.usage["input_tokens"], output_tokens=exc.usage["output_tokens"])
                         session.add(Audit(action="CLAUDE_INVALID", actor=actor,
-                                          details={"snapshot_id": snapshot_id, "reason": exc.reason,
+                                          details={"snapshot_id": snapshot_id, "reason": exc.reason, "model": self.config.claude_model,
                                                    "response_payload": exc.payload, **exc.usage}))
                         await session.commit()
                         raise

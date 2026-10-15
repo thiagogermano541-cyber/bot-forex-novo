@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     market_refresh_seconds: int = Field(default=30, ge=15, le=120)
     verify_btc_on_start: bool = False
     verify_manual_repair_id: str = ""
+    verify_cached_response_at: str = ""
     kraken_enabled: bool = True
     oanda_token: SecretStr = SecretStr("")
     oanda_account_id: str = ""

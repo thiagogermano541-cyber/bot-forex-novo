@@ -12,11 +12,12 @@ export function FinalVerdict({analysis, market, processing, freshnessSeconds = 3
   const saved = verdictLabel(analysis);
   const plan = analysis?.data.trade_plan;
   const reference = analysis?.data.market_reference;
+  const recovered = !!reference?.recovered_from_audit;
   const expired = !!reference?.valid_until && Date.parse(reference.valid_until) <= Date.now();
   const q = market?.snapshot?.quote;
   const outside = !!plan && !!q && ((q.bid+q.ask)/2 < plan.entry_low || (q.bid+q.ask)/2 > plan.entry_high);
   const staleData = !!market && (market.status !== "ATUALIZADO" || !q || Date.now()-Date.parse(q.timestamp)>90000);
-  const blocked = !!plan && plan.status === "CONFIRMADO" && (expired || outside || staleData);
+  const blocked = !!plan && plan.status === "CONFIRMADO" && (expired || outside || staleData || recovered);
   const verdict = blocked ? "AGUARDAR" : saved;
   const scenario = analysis?.data.scenarios.find(s => s.direction === (verdict === "COMPRA" ? "ALTA" : verdict === "VENDA" ? "BAIXA" : "LATERAL"));
   const old = !!analysis && Date.now() - Date.parse(analysis.created_at) > freshnessSeconds * 1000;
@@ -26,8 +27,9 @@ export function FinalVerdict({analysis, market, processing, freshnessSeconds = 3
     <h2>{processing ? "ANALISANDO…" : verdict}</h2>
     {analysis ? <>
       <small>{new Date(analysis.created_at).toLocaleString("pt-BR", {timeZone:"UTC"})} UTC · {analysis.decision}</small>
+      {recovered && !blocked && <p className="verdict-age">Resposta recuperada, com os dados e o horário originais.</p>}
       {old && <p className="verdict-age">Análise anterior. Solicite uma nova análise para avaliar o mercado atual.</p>}
-      {blocked && <p className="verdict-age">Veredito salvo: {saved}. {expired ? "Plano vencido." : staleData ? "Dados atuais insuficientes." : "Preço atual fora da região de entrada."} Solicite nova análise.</p>}
+      {blocked && <p className="verdict-age">Veredito salvo: {saved}. {recovered ? "Resposta recuperada de uma solicitação anterior." : expired ? "Plano vencido." : staleData ? "Dados atuais insuficientes." : "Preço atual fora da região de entrada."} Solicite nova análise.</p>}
       <p>{analysis.data.summary}</p>
       <PlanDetails analysis={analysis}/>
       {!plan && scenario && verdict !== "AGUARDAR" && <div className="verdict-conditions">

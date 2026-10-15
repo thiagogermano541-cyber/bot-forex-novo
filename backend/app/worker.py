@@ -131,6 +131,9 @@ async def main():
             if cfg.verify_manual_repair_id:
                 from .verify_manual_repair import run_once
                 tasks.append(asyncio.create_task(run_once(redis)))
+            if cfg.verify_cached_response_at:
+                from .recover_response import run_once as recover_once
+                tasks.append(asyncio.create_task(recover_once(redis)))
             while True:
                 try:
                     async with redis.lock("jarvis:outbox", timeout=180, blocking_timeout=1):
