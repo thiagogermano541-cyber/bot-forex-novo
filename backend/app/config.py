@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     claude_pause_reason: str = ""
     claude_model: str = ""
     claude_max_tokens: int = Field(default=3000, ge=1000, le=16000)
-    claude_input_token_limit: int = Field(default=26000, ge=1000, le=100000)
+    claude_input_token_limit: int = Field(default=18000, ge=1000, le=100000)
     claude_input_usd_per_million: float = Field(default=0, ge=0, allow_inf_nan=False)
     claude_output_usd_per_million: float = Field(default=0, ge=0, allow_inf_nan=False)
     daily_ai_budget_usd: float = Field(default=5, ge=0, allow_inf_nan=False)

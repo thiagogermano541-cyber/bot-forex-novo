@@ -142,7 +142,7 @@ O gate do backend só pode interromper com DADOS INSUFICIENTES. As decisões CEN
 
 ### Análises v2 e qualidade dos sinais
 
-A IA recebe até 60 candles fechados por período em formato tabular sem perda de OHLCV, preços e timestamps UTC. A contagem de tokens escolhe uma janela menor quando necessário, priorizando H1/H4; os períodos efetivamente enviados ficam registrados na análise. O backend calcula somente fatos observáveis da janela (extremos, volumes separados e spread), sem escolher a direção. Claude compara contexto, setup, execução e o argumento contrário antes do veredito.
+A IA recebe 30 candles fechados por período em formato tabular sem perda de OHLCV, preços e timestamps UTC. A contagem gratuita de tokens pode reduzir a janela para 20 candles em cada período; os períodos efetivamente enviados ficam registrados na análise. O backend calcula somente fatos observáveis da janela (extremos, volumes separados e spread), sem escolher a direção. Claude compara contexto, setup, execução e o argumento contrário antes do veredito.
 
 Novos planos incluem entrada, stop estrutural, alvos escolhidos pelo Claude por máxima/mínima de candles citados (o backend copia o preço exato do campo escolhido), confirmação, prazo e cancelamento. Uma direção exige plano confirmado, evidência observada em um período maior e um menor, confirmação no último candle fechado do período escolhido, referência dentro da entrada e níveis coerentes. Setups pendentes retornam AGUARDAR. O risco/retorno exibido é bruto e projetado, com entrada conservadora; não inclui taxas ou slippage. O painel distingue veredito salvo de plano vencido ou cotação fora da entrada. O histórico antigo permanece disponível.
 
@@ -159,3 +159,9 @@ O backend decodifica as colunas sem alterar decisões, níveis ou fontes e aplic
 Citações adicionais no resumo, justificativa, períodos, riscos e cancelamentos são preservadas em `narrative_sources`, validadas contra o snapshot exato e convertidas para os IDs originais do provedor. Elas não substituem as evidências observadas exigidas para uma decisão direcional. Problemas independentes de colunas são reportados em conjunto na única revisão permitida.
 
 Os rótulos de zonas são interpretações analíticas (por exemplo, suporte, resistência ou liquidez), preservados como texto limitado e sem conversão automática para compradores/vendedores. As verificações de limites, fontes e direção continuam obrigatórias. Uma resposta rejeitada auditada pode ser revalidada contra o snapshot original sem chamar a IA; a recuperação conserva o horário original, não emite alertas e não duplica custos. O painel identifica respostas recuperadas e exige nova análise para um veredito atual.
+
+### Setup manual e custo
+
+O botão **Montar setup BTC** solicita um plano condicional completo quando houver estrutura defensável: COMPRA EM ou VENDA EM, região de entrada, stop, alvos, confirmação e prazo. Um plano PENDENTE pode ter entrada distante da cotação e coexistir com AGUARDAR: o painel acompanha a região sem confirmar automaticamente o gatilho e sem chamar a IA. Planos vencidos, invalidados, recuperados ou sem cotação atual não aparecem como entradas atuais. Sem tese defensável, Claude informa o impedimento.
+
+Padrões de contexto: 30 candles em cada um dos seis períodos, limite de entrada de 18.000 tokens e saída de 3.000; resposta concisa visando 2.200 tokens. Uma revisão de inconsistências pode adicionar uma segunda chamada; ambos os usos são contabilizados. Atualizar o painel e acompanhar preços não consome tokens do Claude.

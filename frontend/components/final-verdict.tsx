@@ -1,4 +1,5 @@
 import type {Analysis,Market} from "@/lib/api";
+import {setupState} from "@/lib/setup-state";
 
 export function verdictLabel(analysis?: Analysis): string {
   if (!analysis) return "AGUARDAR";
@@ -9,34 +10,29 @@ export function verdictLabel(analysis?: Analysis): string {
 export function FinalVerdict({analysis, market, processing, freshnessSeconds = 300}: {
   analysis?: Analysis; market?: Market; processing: boolean; freshnessSeconds?: number;
 }) {
-  const saved = verdictLabel(analysis);
   const plan = analysis?.data.trade_plan;
-  const reference = analysis?.data.market_reference;
-  const recovered = !!reference?.recovered_from_audit;
-  const expired = !!reference?.valid_until && Date.parse(reference.valid_until) <= Date.now();
-  const q = market?.snapshot?.quote;
-  const outside = !!plan && !!q && ((q.bid+q.ask)/2 < plan.entry_low || (q.bid+q.ask)/2 > plan.entry_high);
-  const staleData = !!market && (market.status !== "ATUALIZADO" || !q || Date.now()-Date.parse(q.timestamp)>90000);
-  const blocked = !!plan && plan.status === "CONFIRMADO" && (expired || outside || staleData || recovered);
-  const verdict = blocked ? "AGUARDAR" : saved;
+  const state = setupState(analysis, market);
+  const {saved, recovered, blocked, pending, verdict} = state;
   const scenario = analysis?.data.scenarios.find(s => s.direction === (verdict === "COMPRA" ? "ALTA" : verdict === "VENDA" ? "BAIXA" : "LATERAL"));
   const old = !!analysis && Date.now() - Date.parse(analysis.created_at) > freshnessSeconds * 1000;
-  const tone = verdict === "COMPRA" ? "buy" : verdict === "VENDA" ? "sell" : "wait";
+  const tone = state.tone === "COMPRA" ? "buy" : state.tone === "VENDA" ? "sell" : "wait";
   return <section className={`panel final-verdict ${tone}`} aria-live="polite">
-    <div className="verdict-heading"><span className="eyebrow">VEREDITO FINAL · BTC/USD</span><span className="mini-label">EXPERIMENTAL</span></div>
-    <h2>{processing ? "ANALISANDO…" : verdict}</h2>
+    <div className="verdict-heading"><span className="eyebrow">{pending ? "SETUP PREPARADO" : "VEREDITO FINAL"} · BTC/USD</span><span className="mini-label">{pending ? "PENDENTE · EXPERIMENTAL" : "EXPERIMENTAL"}</span></div>
+    <h2>{processing ? "PREPARANDO SETUP…" : state.headline}</h2>
+    {pending && plan && !processing && <><div className="setup-entry">{plan.entry_low === plan.entry_high ? usd(plan.entry_low) : `${usd(plan.entry_low)} – ${usd(plan.entry_high)}`}</div><p className="verdict-age">{state.inRegion ? "Preço na região proposta; aguarde o gatilho descrito abaixo." : "Plano condicional pronto. A entrada depende da confirmação abaixo."}</p></>}
     {analysis ? <>
       <small>{new Date(analysis.created_at).toLocaleString("pt-BR", {timeZone:"UTC"})} UTC · {analysis.decision}</small>
       {recovered && !blocked && <p className="verdict-age">Resposta recuperada, com os dados e o horário originais.</p>}
-      {old && <p className="verdict-age">Análise anterior. Solicite uma nova análise para avaliar o mercado atual.</p>}
-      {blocked && <p className="verdict-age">Veredito salvo: {saved}. {recovered ? "Resposta recuperada de uma solicitação anterior." : expired ? "Plano vencido." : staleData ? "Dados atuais insuficientes." : "Preço atual fora da região de entrada."} Solicite nova análise.</p>}
+      {old && !pending && <p className="verdict-age">Análise anterior. Solicite uma nova análise para avaliar o mercado atual.</p>}
+      {blocked && <p className="verdict-age">Veredito salvo: {saved}. {state.reason} Solicite nova análise.</p>}
+      {plan && <PlanDetails analysis={analysis}/>}
+      {!plan && !processing && <p className="verdict-age">Sem setup defensável nesta análise. Consulte abaixo o impedimento informado pelo Claude.</p>}
       <p>{analysis.data.summary}</p>
-      <PlanDetails analysis={analysis}/>
       {!plan && scenario && verdict !== "AGUARDAR" && <div className="verdict-conditions">
         <div><h4>Confirmar antes de agir</h4>{scenario.confirmation.map(c => <p key={c}>{c}</p>)}</div>
         <div><h4>Invalidação</h4><p>{scenario.invalidation}</p>{scenario.invalidation_price && <strong>{new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(scenario.invalidation_price)}</strong>}</div>
       </div>}
-    </> : <p>Clique em Solicitar análise. O Claude avaliará os dados reais e devolverá um veredito validado.</p>}
+    </> : <p>Clique em Montar setup BTC. O Claude avaliará os dados reais e devolverá um veredito validado.</p>}
   </section>;
 }
 

@@ -6,7 +6,7 @@ COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN npm test && npm run build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

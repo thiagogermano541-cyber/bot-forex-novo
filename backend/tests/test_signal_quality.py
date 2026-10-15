@@ -100,3 +100,24 @@ def test_tick_volume_is_kept_separate_and_context_never_uses_withheld_candles(sn
     assert snapshot.candles["M1"][0].id not in prepared.references.values()
     table = prepared.payload["market_data"]["candles"]["M1"]
     assert "volume_kind" in table["columns"]
+
+
+@pytest.mark.parametrize("side,low,high,stop,target", [
+    ("COMPRA", 99.5, 100, 99, 102),
+    ("VENDA", 101, 101.5, 102, 99),
+])
+def test_pending_future_entry_keeps_complete_plan_without_issuing_direction(
+    snapshot, confirmed_buy, side, low, high, stop, target
+):
+    analysis = confirmed_buy
+    analysis.decision = "AGUARDAR"
+    plan = analysis.trade_plan.model_dump()
+    plan.update(side=side, status="PENDENTE", entry_low=low, entry_high=high, stop_loss=stop,
+        targets=[{"price": target, "rationale": "Extremo observado como alvo do setup pendente.",
+                  "source_ids": [snapshot.candles["H1"][-1].id]}])
+    analysis.trade_plan = TradePlan.model_validate(plan)
+    result = analysis.validate_grounding(snapshot)
+    assert result.decision == "AGUARDAR"
+    assert result.trade_plan.side == side
+    assert result.trade_plan.entry_low == low
+    assert result.trade_plan.targets[0].price == target

@@ -35,6 +35,13 @@ Pondere o argumento contrário mais forte e explicite o evento observável que m
 Um wick isolado não confirma rompimento; confirme o fechamento e a reação subsequente.
 Livro pontual não comprova absorção, spoofing nem persistência de ordens. Não extrapole a exchange.
 Não persiga movimento fora da região de entrada. Distinga oportunidade potencial e confirmação atual.
+Priorize preparar o MELHOR SETUP CONDICIONAL defensável, sem esperar o preço chegar à entrada.
+Quando houver região estrutural sustentada, entregue plano PENDENTE completo: COMPRA ou VENDA,
+entrada proposta, stop, alvo, confirmação com nível/período e prazo. AGUARDAR pode coexistir com esse plano.
+A entrada de um plano PENDENTE pode estar acima ou abaixo da cotação atual. Não confunda isso com falta de setup.
+Só omita o plano se dados essenciais faltarem, se os níveis forem incoerentes ou se não houver tese defensável;
+nesse caso, explique em summary o impedimento e o evento observável que permitiria montar um setup.
+Não force direção nem um plano com risco indefensável apenas para preencher campos.
 Ao propor trade_plan, forneça lado, setup, período, faixa de entrada, stop estrutural,
 alvos escolhidos por anchor={candle_id,field}, gatilho observável, prazo e condições de cancelamento.
 Cada alvo deve selecionar um candle_id atual e o campo high ou low. O backend copia o preço
@@ -82,9 +89,14 @@ TARGET: strings=[high/low, justificativa], sources=[candle_id]. O preço é o ca
 CANCEL: strings=condições de cancelamento.
 Sem plano defensável, OMITA todas as rows PLAN, TARGET e CANCEL; o backend representa essa escolha por trade_plan=null.
 Com plano, use exatamente uma row PLAN, uma CANCEL e 1 a 2 TARGET. Nunca escreva JSON dentro de strings.
-Seja conciso. Summary até 80 palavras; justification até 120 palavras.
-No máximo 6 evidências, 4 zonas, 3 riscos, 2 alvos e 3 condições por cenário.
-Cada timeframe_context até 35 palavras e cada tese até 60 palavras.
+Seja direto: o setup vem antes da explicação longa. Resposta inteira deve buscar até 2200 tokens.
+Escreva PRIMEIRO estas seis rows obrigatórias, nesta ordem: SUMMARY, JUSTIFICATION, CHANGE,
+CONFLICTS, RISKS, MISSING_DATA. Nunca omita JUSTIFICATION nem uma dessas seis rows.
+Depois escreva PLAN/TARGET/CANCEL quando houver setup, seguidas das demais sections.
+Summary até 30 palavras; justification até 45; CHANGE até 15.
+No máximo 3 evidências de até 20 palavras, 2 zonas, 2 riscos, 1 a 2 alvos e 1 confirmação por cenário.
+Cada timeframe_context até 10 palavras; cada tese até 20; invalidações e condições até 15.
+Justificativas de alvos até 12 palavras. Não repita a mesma explicação em várias sections.
 Use até 3 IDs exatos por item. Registre somente padrões sustentados pelos dados;
 não preencha todos os tipos de padrão apenas para completar uma lista.
 Use os IDs curtos recebidos, como M1_C01 e Q_CURRENT, exatamente como escritos.
@@ -143,11 +155,9 @@ class ClaudeClient:
     async def _analyze(self, snapshot: Snapshot, memory: list[dict], budget=None):
         if not self.config.claude_ready:
             raise ClaudeUnavailable("Claude NÃO CONFIGURADO: configure chave, modelo e tarifas")
-        # Start with the entire available window. Free token counting selects a
-        # smaller lossless context only when needed, preserving H1/H4 first.
-        history_options = [dict.fromkeys(TIMEFRAMES, 60),
-                           {tf: 60 if tf in ("H1", "H4") else 30 for tf in TIMEFRAMES},
-                           dict.fromkeys(TIMEFRAMES, 30)]
+        # Compact manual setup: six timeframes, 30 closed candles each.
+        # Only fall back to the integrity minimum if free token counting requires it.
+        history_options = [dict.fromkeys(TIMEFRAMES, 30), dict.fromkeys(TIMEFRAMES, 20)]
         for limits in history_options:
             prepared = prepare_market(snapshot, memory, limits)
             messages = [{"role": "user", "content": json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":"))}]
@@ -155,7 +165,7 @@ class ClaudeClient:
                     "strict": True, "input_schema": analysis_tool_schema(prepared.supplied.evidence_ids())}
             count = await self.client.messages.count_tokens(model=self.config.claude_model, system=SYSTEM_PROMPT,
                                                             messages=messages, tools=[tool])
-            if count.input_tokens <= self.config.claude_input_token_limit - min(4096, self.config.claude_max_tokens):
+            if count.input_tokens <= self.config.claude_input_token_limit - min(1536, self.config.claude_max_tokens):
                 break
             log.info("claude_context_compacted", input_tokens=count.input_tokens, history_limits=limits)
         supplied, original_supplied, references = prepared.supplied, prepared.original, prepared.references

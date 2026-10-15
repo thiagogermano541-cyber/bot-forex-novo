@@ -139,7 +139,7 @@ async def config(request: Request, user=Depends(current_user)):
             "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "assets": list(ACTIVE_ASSETS),
             "market_refresh_seconds": cfg.market_refresh_seconds,
             "analysis_mode": "MANUAL" if cfg.analysis_on_demand_only else "AUTOMÁTICO",
-            "analysis_protocol_version": 10,
+            "analysis_protocol_version": 11,
             "daily_budget_enabled": cfg.enforce_daily_budget,
             "max_request_cost_usd": 2 * ((cfg.claude_input_token_limit + 256) * cfg.claude_input_usd_per_million + cfg.claude_max_tokens * cfg.claude_output_usd_per_million) / 1_000_000,
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",

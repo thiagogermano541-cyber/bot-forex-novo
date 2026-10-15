@@ -139,5 +139,5 @@ async def test_oversized_context_never_sends_a_paid_analysis(snapshot):
         await client.analyze(snapshot, [], budget=budget)
     client.client.messages.create.assert_not_awaited()
     budget.reserve.assert_not_awaited()
-    assert client.client.messages.count_tokens.call_count == 3
+    assert client.client.messages.count_tokens.call_count == 2
     await client.client.close()
