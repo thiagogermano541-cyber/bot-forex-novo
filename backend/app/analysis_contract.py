@@ -5,12 +5,12 @@ from .schemas import Decision, StrictModel
 
 
 SECTIONS = ("SUMMARY", "JUSTIFICATION", "CHANGE", "EVIDENCE", "ZONE", "SCENARIO", "TIMEFRAME",
-            "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL")
+            "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE")
 
 
 class AnalysisRow(StrictModel):
     section: Literal["SUMMARY", "JUSTIFICATION", "CHANGE", "EVIDENCE", "ZONE", "SCENARIO", "TIMEFRAME",
-                     "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL"]
+                     "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE"]
     strings: list[str]
     numbers: list[float]
     sources: list[str]
@@ -48,6 +48,9 @@ def unpack_analysis(payload: dict) -> dict:
                 result[single[kind]] = s[0] if scalar else s
                 if refs:
                     result["narrative_sources"][single[kind]] = refs
+            elif kind in ("OBSERVADO", "INFERÊNCIA", "HIPÓTESE"):
+                shape(strings=1)
+                result["evidence"].append(dict(category=kind, description=s[0], source_ids=refs))
             elif kind == "EVIDENCE":
                 shape(strings=2)
                 result["evidence"].append(dict(category=s[0], description=s[1], source_ids=refs))

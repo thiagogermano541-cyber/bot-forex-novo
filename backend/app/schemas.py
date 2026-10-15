@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TIMEFRAMES = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 Asset = Literal["BTC/USD"]
@@ -127,7 +127,17 @@ class Decision(StrEnum):
 class Evidence(StrictModel):
     category: Literal["OBSERVADO", "INFERÊNCIA", "HIPÓTESE"]
     description: str = Field(min_length=4, max_length=1200)
-    source_ids: list[str] = Field(min_length=1, max_length=20)
+    source_ids: list[str] = Field(min_length=1, max_length=64)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def canonical_category(cls, value):
+        # Normalize spelling only. Never promote an inference to an observation.
+        if isinstance(value, str):
+            aliases = {"OBSERVADO": "OBSERVADO", "INFERENCIA": "INFERÊNCIA",
+                       "INFERÊNCIA": "INFERÊNCIA", "HIPOTESE": "HIPÓTESE", "HIPÓTESE": "HIPÓTESE"}
+            return aliases.get(value.strip().upper(), value)
+        return value
 
 
 class Zone(StrictModel):
@@ -156,7 +166,7 @@ class Scenario(StrictModel):
 class SignalTarget(StrictModel):
     price: float = Field(gt=0)
     rationale: str = Field(min_length=8, max_length=500)
-    source_ids: list[str] = Field(min_length=1, max_length=3)
+    source_ids: list[str] = Field(min_length=1, max_length=64)
 
 
 class TradePlan(StrictModel):
@@ -168,10 +178,10 @@ class TradePlan(StrictModel):
     entry_high: float = Field(gt=0)
     stop_loss: float = Field(gt=0)
     confirmation: str = Field(min_length=10, max_length=800)
-    confirmation_source_ids: list[str] = Field(max_length=3)
+    confirmation_source_ids: list[str] = Field(max_length=64)
     targets: list[SignalTarget] = Field(min_length=1, max_length=3)
     valid_for_minutes: int = Field(ge=1, le=60)
-    cancel_if: list[str] = Field(min_length=1, max_length=3)
+    cancel_if: list[str] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
     def geometry(self):

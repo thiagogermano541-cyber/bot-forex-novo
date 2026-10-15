@@ -49,7 +49,7 @@ async def test_truncated_response_is_never_published(snapshot):
 
 
 async def test_claude_revises_rejected_decision_and_accounts_both_calls(snapshot, wait_analysis):
-    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+    client = ClaudeClient(Settings(claude_max_analysis_attempts=2, anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
                            claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     accepted = wait_analysis.model_copy(deep=True)
     for evidence in accepted.evidence:

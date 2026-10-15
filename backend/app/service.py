@@ -78,6 +78,8 @@ class AnalysisService:
             raise ValueError("Somente BTC/USD está habilitado")
         # One global lock serializes budgets across API, worker and replays.
         async with self.redis.lock("jarvis:analysis", timeout=300, blocking_timeout=1):
+            if await self.redis.get(f"jarvis:analysis-failure:{asset}"):
+                raise BusyError("A última resposta foi recusada. Novas chamadas estão bloqueadas por até 2 minutos para proteger seus créditos; esta tentativa não chamou o Claude.")
             mode = "BACKTEST" if replay_id else "EXPERIMENTAL"
             if replay_id:
                 async with Session() as session:
@@ -116,6 +118,7 @@ class AnalysisService:
                                           details={"snapshot_id": snapshot_id, "reason": exc.reason, "model": self.config.claude_model,
                                                    "response_payload": exc.payload, **exc.usage}))
                         await session.commit()
+                        await self.redis.set(f"jarvis:analysis-failure:{asset}", "INVALID_RESPONSE", ex=120)
                         raise
                     model = self.config.claude_model
                 result_data = result.model_dump(mode="json")

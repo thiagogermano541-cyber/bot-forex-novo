@@ -16,6 +16,10 @@ def analysis_tool_schema(source_ids: set[str]) -> dict:
     # branches, repeated regexes, or large citation enums enter the compiler.
     schema["properties"]["decision"] = definitions["Decision"]
     schema["properties"]["rows"]["items"] = definitions["AnalysisRow"]
+    # Legacy EVIDENCE rows remain decodable for audited answers, but new output
+    # uses the strict section enum for its category, avoiding free-text drift.
+    sections = schema["properties"]["rows"]["items"]["properties"]["section"]["enum"]
+    sections.remove("EVIDENCE")
 
     def transform(node):
         if isinstance(node, list):

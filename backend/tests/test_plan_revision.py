@@ -37,7 +37,7 @@ async def test_real_failure_geometry_gets_exact_prices_and_model_can_repair_or_o
         corrected["decision"] = "AGUARDAR"
     else:
         corrected["trade_plan"]["targets"][0]["anchor"]["field"] = "high"
-    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+    client = ClaudeClient(Settings(claude_max_analysis_attempts=2, anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
         claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(side_effect=[response(raw), response(corrected)])
@@ -65,7 +65,7 @@ async def test_real_failure_geometry_gets_exact_prices_and_model_can_repair_or_o
 async def test_wrong_plan_types_never_become_a_valid_analysis(snapshot, confirmed_buy, bad_plan):
     raw = wire_plan(snapshot, confirmed_buy)
     raw["trade_plan"] = bad_plan
-    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+    client = ClaudeClient(Settings(claude_max_analysis_attempts=2, anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
         claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=response(raw))

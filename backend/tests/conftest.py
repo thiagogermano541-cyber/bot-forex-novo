@@ -28,7 +28,7 @@ def as_wire(raw):
     for section, key in (("CONFLICTS", "conflicts"), ("RISKS", "risks"), ("MISSING_DATA", "missing_data")):
         row(section, raw[key], sources=raw.get("narrative_sources", {}).get(key, []))
     for item in raw["evidence"]:
-        row("EVIDENCE", [item["category"], item["description"]], sources=item["source_ids"])
+        row(item["category"], [item["description"]], sources=item["source_ids"])
     for item in raw["zones"]:
         row("ZONE", [item["kind"], item["explanation"]], [item["low"], item["high"]], item["source_ids"])
     for item in raw["scenarios"]:

@@ -27,6 +27,7 @@ async def test_auth_integrity_and_persistence(monkeypatch):
             assert config["claude"] == "NÃO CONFIGURADO"
             assert config["analysis_mode"] == "MANUAL"
             assert config["daily_budget_enabled"] is False
+            assert config["max_analysis_attempts"] == 1
             assert "anthropic_api_key" not in config
             assert (await client.post("/analyses", headers=origin, json={"asset": "ETH/USD"})).status_code == 422
             # Lock is only a test stand-in; production uses Redis distributed leases.

@@ -91,7 +91,10 @@ async def run_once(redis):
             audit = rows[0]
             payload = audit.details.get("response_payload") or {}
             kinds = [r["strings"][0] for r in payload.get("rows", []) if r.get("section") == "ZONE" and r.get("strings")]
-            log.info("cached_response_diagnostic", zone_labels=kinds, decision=payload.get("decision"))
+            log.info("cached_response_diagnostic", zone_labels=kinds, decision=payload.get("decision"),
+                     rows=[{"section": r.get("section"), "strings": len(r.get("strings", [])),
+                            "numbers": len(r.get("numbers", [])), "sources": len(r.get("sources", []))}
+                           for r in payload.get("rows", [])])
             snapshot = await session.get(MarketSnapshot, audit.details["snapshot_id"])
             if not snapshot or snapshot.asset != "BTC/USD":
                 raise ValueError("Original BTC snapshot not available")
@@ -112,7 +115,8 @@ async def run_once(redis):
                     await client.post(f"{origin}/api/auth/logout", headers={"Origin": origin}, json={})
             log.info("cached_response_recovered", status="PASS", public_history_verified=True, analysis_id=record.id, decision=record.decision,
                      original_request_at=record.created_at.isoformat(), new_api_cost_usd=0,
-                     original_api_cost_usd=record.cost_usd, alerts_created=0)
+                     original_api_cost_usd=record.cost_usd, alerts_created=0,
+                     plan_status=(record.data.get("trade_plan") or {}).get("status"))
         await redis.set(key, "PASS")
     except Exception as exc:
         log.warning("cached_response_recovered", status="FAIL", error_type=type(exc).__name__, reason=str(exc)[:2000])

@@ -73,7 +73,7 @@ def test_missing_directional_scenario_returns_validation_error(snapshot, confirm
 
 
 async def test_one_review_can_repair_all_issues_and_keep_a_grounded_pending_plan(snapshot, confirmed_buy):
-    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+    client = ClaudeClient(Settings(claude_max_analysis_attempts=2, anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
         claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     aliases = {c.id: f"{tf}_C{index:02d}" for tf, rows in snapshot.candles.items()
                for index, c in enumerate(rows, 1)}
@@ -107,7 +107,7 @@ async def test_one_review_can_repair_all_issues_and_keep_a_grounded_pending_plan
 
 
 async def test_unrepaired_response_is_never_relabelled_or_published(snapshot, wait_analysis):
-    client = ClaudeClient(Settings(anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
+    client = ClaudeClient(Settings(claude_max_analysis_attempts=2, anthropic_api_key="TEST_ONLY", claude_model="TEST_MODEL",
         claude_input_usd_per_million=1, claude_output_usd_per_million=5))
     raw = wait_analysis.model_dump(mode="json")
     raw["evidence"][0]["source_ids"] = ["M1_C99"]
@@ -118,7 +118,7 @@ async def test_unrepaired_response_is_never_relabelled_or_published(snapshot, wa
     client.client.messages.count_tokens = AsyncMock(return_value=SimpleNamespace(input_tokens=1000))
     client.client.messages.create = AsyncMock(return_value=response)
     try:
-        with pytest.raises(InvalidClaudeResponse, match="análise consistente") as error:
+        with pytest.raises(InvalidClaudeResponse, match="não passou na validação") as error:
             await client.analyze(snapshot, [])
         assert error.value.payload == as_wire(raw)
         assert client.client.messages.create.call_count == 2

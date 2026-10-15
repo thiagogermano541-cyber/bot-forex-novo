@@ -18,7 +18,7 @@ from .budget import reserved_today
 from .db import Alert, AnalysisRecord, Audit, Delivery, Evaluation, MarketSnapshot, PaperTrade, Session, User, engine, init_db
 from .evaluation import evaluate_pending
 from .schemas import ACTIVE_ASSETS, Asset, Decision, Snapshot, utcnow
-from .service import AnalysisService, serialize
+from .service import AnalysisService, BusyError, serialize
 from .telegram import allowed_chats, enqueue
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -139,9 +139,10 @@ async def config(request: Request, user=Depends(current_user)):
             "kraken": "HABILITADO" if cfg.kraken_enabled else "NÃO CONFIGURADO", "assets": list(ACTIVE_ASSETS),
             "market_refresh_seconds": cfg.market_refresh_seconds,
             "analysis_mode": "MANUAL" if cfg.analysis_on_demand_only else "AUTOMÁTICO",
-            "analysis_protocol_version": 11,
+            "analysis_protocol_version": 12,
             "daily_budget_enabled": cfg.enforce_daily_budget,
-            "max_request_cost_usd": 2 * ((cfg.claude_input_token_limit + 256) * cfg.claude_input_usd_per_million + cfg.claude_max_tokens * cfg.claude_output_usd_per_million) / 1_000_000,
+            "max_analysis_attempts": cfg.claude_max_analysis_attempts,
+            "max_request_cost_usd": cfg.claude_max_analysis_attempts * ((cfg.claude_input_token_limit + 256) * cfg.claude_input_usd_per_million + cfg.claude_max_tokens * cfg.claude_output_usd_per_million) / 1_000_000,
             "telegram": "CONFIGURADO" if cfg.telegram_enabled and cfg.telegram_bot_token.get_secret_value() and allowed_chats(cfg) else "NÃO CONFIGURADO",
             "analysis_interval_seconds": cfg.analysis_interval_seconds, "daily_budget_usd": cfg.daily_ai_budget_usd,
             "stale_after_seconds": cfg.stale_after_seconds, "worker": "ONLINE" if await request.app.state.redis.get("worker:heartbeat") else "OFFLINE",
@@ -182,11 +183,15 @@ class RunRequest(BaseModel):
 async def run(body: RunRequest, request: Request, user=Depends(admin)):
     try:
         return serialize(await request.app.state.service.run(body.asset, actor=user.id))
+    except BusyError as exc:
+        raise HTTPException(429, str(exc), headers={"Retry-After": "120"}) from None
     except LockError:
         raise HTTPException(409, "Uma análise já está em processamento. Aguarde a conclusão antes de solicitar outra.", headers={"Retry-After": "10"}) from None
     except ClaudeProviderFailure as exc:
         raise HTTPException(exc.status_code, str(exc), headers={"Retry-After": "30"} if exc.status_code == 429 else None) from None
-    except (ClaudeUnavailable, InvalidClaudeResponse) as exc:
+    except InvalidClaudeResponse as exc:
+        raise HTTPException(503, f"{exc} Consumo registrado nesta solicitação: US$ {exc.usage['cost_usd']:.5f}.") from None
+    except ClaudeUnavailable as exc:
         raise HTTPException(503, str(exc)) from None
 
 
