@@ -44,6 +44,10 @@ def as_wire(raw):
             return result
         row("PLAN", [plan[k] for k in ("side", "status", "setup_type", "timeframe", "confirmation")],
             [plan[k] for k in ("entry_low", "entry_high", "stop_loss", "valid_for_minutes")], plan["confirmation_source_ids"])
+        if plan.get("trigger"):
+            trigger = plan["trigger"]
+            row("TRIGGER", [trigger["kind"], trigger["anchor"]["field"], trigger["description"]],
+                [] if trigger.get("volume_multiple") is None else [trigger["volume_multiple"]], [trigger["anchor"]["candle_id"]])
         for target in plan["targets"]:
             row("TARGET", [target["anchor"]["field"], target["rationale"]], sources=[target["anchor"]["candle_id"]])
         row("CANCEL", plan["cancel_if"], sources=raw.get("narrative_sources", {}).get("cancel_if", []))

@@ -12,7 +12,9 @@ export function setupState(analysis: Analysis | undefined, market: Market | unde
   const stale = !market || market.status !== "ATUALIZADO" || !q || now-Date.parse(q.timestamp)>90000;
   const outside = !!plan && price !== null && (price<plan.entry_low || price>plan.entry_high);
   const invalidated = !!plan && price !== null && (plan.side === "COMPRA" ? price<=plan.stop_loss : price>=plan.stop_loss);
-  const reason = recovered ? "Resposta recuperada de uma solicitação anterior."
+  const rejected = analysis?.data.setup_quality?.status === "REPROVADO";
+  const reason = rejected ? "Plano reprovado na validação de execução. " + (analysis?.data.setup_quality?.reasons.join(" ") || "")
+    : recovered ? "Resposta recuperada de uma solicitação anterior."
     : expired ? "Prazo do setup encerrado."
     : invalidated ? "Cotação além do nível de invalidação proposto."
     : stale ? "Sem cotação atual para acompanhar o setup."

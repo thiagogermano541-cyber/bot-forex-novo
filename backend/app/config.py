@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     claude_enabled: bool = True
     claude_pause_reason: str = ""
     claude_model: str = ""
+    minimum_setup_rr: float = Field(default=1.5, ge=1, le=5, allow_inf_nan=False)
     claude_max_analysis_attempts: int = Field(default=1, ge=1, le=2)
     claude_max_tokens: int = Field(default=3000, ge=1000, le=16000)
     claude_input_token_limit: int = Field(default=18000, ge=1000, le=100000)

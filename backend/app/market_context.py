@@ -1,6 +1,7 @@
 """Compact, lossless OHLCV and observed facts. No signal decisions are made here."""
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+from statistics import median
 
 from .schemas import Snapshot, TIMEFRAMES
 
@@ -64,9 +65,20 @@ def prepare_market(snapshot: Snapshot, memory: list[dict], limits: dict[str, int
         observed["quote"] = {"source_id": supplied.quote.id, "reference_price": midpoint,
                              "spread_usd": supplied.quote.ask - supplied.quote.bid,
                              "spread_bps": (supplied.quote.ask - supplied.quote.bid) / midpoint * 10000}
-    previous = [{**row, "scenarios": [{k: v for k, v in scenario.items() if k != "evidence_ids"}
-                                      for scenario in row.get("scenarios", [])],
-                 "trade_plan": {k: v for k, v in (row.get("trade_plan") or {}).items()
-                                if k not in ("confirmation_source_ids", "targets")}} for row in memory]
+    # Lossless trade table: source IDs, subsecond UTC time, price, size and side
+    # are retained; repeated keys/provider strings no longer consume tokens per trade.
+    if supplied.trades:
+        columns = ["id", "timestamp_utc_seconds", "price", "volume", "side", "provider"]
+        if all(set(t) <= {"id", "timestamp", "price", "volume", "side", "provider"} for t in supplied.trades):
+            context["trades"] = {"columns": columns, "rows": [[t["id"], datetime.fromisoformat(t["timestamp"]).timestamp(),
+                t["price"], t["volume"], t["side"], t.get("provider")] for t in supplied.trades]}
+    for tf, rows in supplied.candles.items():
+        volumes = [r.volume for r in rows[-20:] if r.volume_kind == "REAL" and r.volume is not None]
+        if tf in facts:
+            facts[tf]["real_volume_median_20"] = median(volumes) if volumes else None
+    # Past plans are not instructions or current levels. Do not carry a pending
+    # plan through the memory after its trigger, economics or expiry have changed.
+    previous = [{"at": row.get("at"), "decision": row.get("decision"), "summary": row.get("summary", "")[:400]}
+                for row in memory[-1:]]
     return PreparedMarket({"market_data": context, "observed_facts": observed,
                            "previous_analyses": previous}, supplied, original, references)

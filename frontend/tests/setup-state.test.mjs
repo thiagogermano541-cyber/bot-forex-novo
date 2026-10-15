@@ -28,3 +28,9 @@ test("a confirmed plan outside its entry remains blocked",()=>{
  const confirmed={...analysis,verdict:"VENDA",data:{...analysis.data,trade_plan:{...analysis.data.trade_plan,status:"CONFIRMADO"}}};
  assert.equal(setupState(confirmed,market,now).headline,"AGUARDAR");
 });
+
+test("a rejected proposal never appears as a pending buy or sell entry",()=>{
+ const rejected={...analysis,data:{...analysis.data,setup_quality:{status:"REPROVADO",reasons:["R/R 0.26 abaixo do mínimo."]}}};
+ const state=setupState(rejected,market,now);
+ assert.equal(state.pending,false);assert.equal(state.headline,"AGUARDAR");assert.match(state.reason,/R\/R 0.26/);
+});

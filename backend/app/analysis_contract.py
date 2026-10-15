@@ -5,12 +5,12 @@ from .schemas import Decision, StrictModel
 
 
 SECTIONS = ("SUMMARY", "JUSTIFICATION", "CHANGE", "EVIDENCE", "ZONE", "SCENARIO", "TIMEFRAME",
-            "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE")
+            "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE", "TRIGGER")
 
 
 class AnalysisRow(StrictModel):
     section: Literal["SUMMARY", "JUSTIFICATION", "CHANGE", "EVIDENCE", "ZONE", "SCENARIO", "TIMEFRAME",
-                     "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE"]
+                     "CONFLICTS", "RISKS", "MISSING_DATA", "PLAN", "TARGET", "CANCEL", "OBSERVADO", "INFERÊNCIA", "HIPÓTESE", "TRIGGER"]
     strings: list[str]
     numbers: list[float]
     sources: list[str]
@@ -27,7 +27,7 @@ def unpack_analysis(payload: dict) -> dict:
     result = dict(decision=wire.decision, evidence=[], zones=[], scenarios=[], timeframe_context={}, narrative_sources={})
     single = {"SUMMARY": "summary", "JUSTIFICATION": "justification", "CHANGE": "change_from_previous",
               "CONFLICTS": "conflicts", "RISKS": "risks", "MISSING_DATA": "missing_data"}
-    seen, plan, targets, cancel = set(), None, [], None
+    seen, plan, targets, cancel, trigger = set(), None, [], None, None
     errors = []
     for index, row in enumerate(wire.rows):
         s, n, refs = row.strings, row.numbers, row.sources
@@ -48,7 +48,7 @@ def unpack_analysis(payload: dict) -> dict:
                 result[single[kind]] = s[0] if scalar else s
                 if refs:
                     result["narrative_sources"][single[kind]] = refs
-            elif kind in ("OBSERVADO", "INFERÊNCIA", "HIPÓTESE"):
+            elif kind in ("OBSERVADO", "INFERÊNCIA", "HIPÓTESE", "TRIGGER"):
                 shape(strings=1)
                 result["evidence"].append(dict(category=kind, description=s[0], source_ids=refs))
             elif kind == "EVIDENCE":
@@ -74,7 +74,14 @@ def unpack_analysis(payload: dict) -> dict:
                 if plan is not None:
                     raise ValueError("Only one PLAN row is allowed")
                 plan = dict(side=s[0], status=s[1], setup_type=s[2], timeframe=s[3], confirmation=s[4],
-                            entry_low=n[0], entry_high=n[1], stop_loss=n[2], valid_for_minutes=n[3], confirmation_source_ids=refs)
+                            entry_low=n[0], entry_high=n[1], stop_loss=n[2], valid_for_minutes=n[3], confirmation_source_ids=refs, trigger=None)
+            elif kind == "TRIGGER":
+                if len(s) != 3 or len(refs) != 1 or len(n) > 1:
+                    raise ValueError("TRIGGER requires kind, high/low, description; one candle source and optional volume multiple")
+                if trigger is not None:
+                    raise ValueError("Only one TRIGGER row is allowed")
+                trigger = dict(kind=s[0], anchor=dict(candle_id=refs[0], field=s[1]), description=s[2],
+                               volume_multiple=n[0] if n else None)
             elif kind == "TARGET":
                 shape(strings=2, sources=1)
                 targets.append(dict(anchor=dict(candle_id=refs[0], field=s[0]), rationale=s[1]))
@@ -89,12 +96,14 @@ def unpack_analysis(payload: dict) -> dict:
             errors.append(str(exc))
     if set(single) - seen:
         errors.append(f"Missing required singleton rows: {sorted(set(single)-seen)}")
-    if plan is None and (targets or cancel is not None):
+    if plan is None and (targets or cancel is not None or trigger is not None):
         errors.append("TARGET/CANCEL rows require a PLAN row; never discard orphan plan fields")
     if plan is not None:
         if not targets or cancel is None:
             errors.append("PLAN requires TARGET and CANCEL rows")
         plan.update(targets=targets, cancel_if=cancel)
+        if trigger is not None:
+            plan["trigger"] = trigger
     if errors:
         raise ValueError("; ".join(errors))
     result["trade_plan"] = plan

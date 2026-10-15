@@ -26,6 +26,9 @@ def revalidate(payload, snapshot, limits):
         item.evidence_ids = [refs.get(i, i) for i in item.evidence_ids]
     result.narrative_sources = {key: [refs.get(i, i) for i in ids] for key, ids in result.narrative_sources.items()}
     if result.trade_plan:
+        if result.trade_plan.trigger:
+            result.trade_plan.trigger.source_ids = [refs.get(i, i) for i in result.trade_plan.trigger.source_ids]
+            result.trade_plan.trigger.volume_source_ids = [refs.get(i, i) for i in result.trade_plan.trigger.volume_source_ids]
         result.trade_plan.confirmation_source_ids = [refs.get(i, i) for i in result.trade_plan.confirmation_source_ids]
         for item in result.trade_plan.targets:
             item.source_ids = [refs.get(i, i) for i in item.source_ids]

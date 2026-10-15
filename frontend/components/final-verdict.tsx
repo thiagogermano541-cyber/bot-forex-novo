@@ -43,10 +43,14 @@ export function PlanDetails({analysis}:{analysis?:Analysis}) {
   const plan = analysis.data.trade_plan;
   const ref = analysis.data.market_reference;
   if (!plan) return null;
+  const quality = analysis.data.setup_quality;
+  const rejected = quality?.status === "REPROVADO";
   return <div className="signal-plan">
-    <div className="verdict-heading"><h4>{plan.setup_type} · {plan.timeframe}</h4><span className="mini-label">{plan.status === "PENDENTE" ? "SETUP PENDENTE" : "CONFIRMADO NO SNAPSHOT"}</span></div>
+    <div className="verdict-heading"><h4>{plan.setup_type} · {plan.timeframe}</h4><span className="mini-label">{rejected ? "REPROVADO PARA ENTRADA" : plan.status === "PENDENTE" ? "SETUP PENDENTE" : "CONFIRMADO NO SNAPSHOT"}</span></div>
+    {rejected && <div className="verdict-age"><strong>Proposta preservada para auditoria; não qualificada como oportunidade.</strong>{quality.reasons.map(r=><p key={r}>{r}</p>)}</div>}
     <div className="plan-levels"><div><small>Região de entrada · {plan.side}</small><strong>{usd(plan.entry_low)} – {usd(plan.entry_high)}</strong></div><div><small>Stop / invalidação propostos</small><strong>{usd(plan.stop_loss)}</strong></div></div>
     <h4>{plan.status === "PENDENTE" ? "Confirmação necessária" : "Evidência de confirmação"}</h4><p>{plan.confirmation}</p>
+    {plan.trigger && <p>Nível do gatilho: {usd(plan.trigger.level)} · {plan.trigger.description}{plan.trigger.volume_multiple != null && plan.trigger.volume_baseline != null ? ` · Volume: ${plan.trigger.volume_multiple}× a mediana observada (${plan.trigger.volume_baseline.toFixed(4)} BTC).` : ""}</p>}
     <h4>Alvos propostos</h4>{plan.targets.map((target,index) => <div className="plan-target" key={target.price}><strong>Alvo {index+1} · {usd(target.price)}</strong><p>{target.rationale}</p>{ref?.gross_risk_reward?.[index] !== undefined && <small>R/R bruto projetado: {ref.gross_risk_reward[index].toFixed(2)} · taxas e slippage não incluídos</small>}</div>)}
     <h4>Cancelar o setup se</h4>{plan.cancel_if.map(c => <p key={c}>{c}</p>)}
     {ref && <div className="plan-reference"><small>Referência analisada: {ref.price == null ? "—" : usd(ref.price)} · dados em {new Date(ref.data_cutoff_utc).toLocaleString("pt-BR",{timeZone:"UTC"})} UTC</small>{ref.valid_until && <small>Válido até {new Date(ref.valid_until).toLocaleString("pt-BR",{timeZone:"UTC"})} UTC, enquanto as condições se mantiverem.</small>}<small>Histórico recebido pela IA: {Object.entries(ref.context_candles).map(([tf,count])=>`${tf}: ${count}`).join(" · ")}</small></div>}

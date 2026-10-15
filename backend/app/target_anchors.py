@@ -1,5 +1,6 @@
 """Bind model-selected candle extremes to observed prices, without choosing a trade."""
 from copy import deepcopy
+from statistics import median
 from typing import Literal
 
 from pydantic import Field
@@ -37,4 +38,19 @@ def resolve_target_anchors(payload: dict, snapshot: Snapshot) -> dict:
             raise ValueError(f"trade_plan.targets[{index}].anchor.candle_id: unknown closed candle {target.anchor.candle_id}")
         plan["targets"][index] = {"price": getattr(candle, target.anchor.field),
                                    "rationale": target.rationale, "source_ids": [candle.id]}
+    trigger = plan.get("trigger")
+    if trigger is not None:
+        if not isinstance(trigger, dict) or set(trigger) - {"kind", "anchor", "description", "volume_multiple"}:
+            raise ValueError("Invalid anchored trigger")
+        anchor = TargetAnchor.model_validate(trigger["anchor"])
+        candle = candles.get(anchor.candle_id)
+        if candle is None:
+            raise ValueError(f"trigger references unknown closed candle {anchor.candle_id}")
+        baseline_rows = [c for c in snapshot.candles.get(plan.get("timeframe"), [])[-20:]
+                         if c.volume_kind == "REAL" and c.volume is not None]
+        baseline = median([c.volume for c in baseline_rows]) if baseline_rows else None
+        plan["trigger"] = dict(kind=trigger["kind"], level=getattr(candle, anchor.field),
+            description=trigger["description"], source_ids=[candle.id],
+            volume_multiple=trigger.get("volume_multiple"), volume_baseline=baseline if baseline and baseline > 0 else None,
+            volume_source_ids=[c.id for c in baseline_rows] if trigger.get("volume_multiple") is not None else [])
     return result

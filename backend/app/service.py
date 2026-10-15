@@ -10,6 +10,8 @@ from sqlalchemy import select
 
 from .claude import ClaudeClient, ClaudeUnavailable, InvalidClaudeResponse
 from .budget import BudgetLedger
+from .analysis_reuse import reusable_wait
+from .setup_quality import assess_setup
 from .config import settings
 from .db import Alert, AnalysisRecord, Audit, MarketSnapshot, Session
 from .providers.kraken import Kraken
@@ -93,6 +95,15 @@ class AnalysisService:
             metadata = dict(input_tokens=0, output_tokens=0, cost_usd=0, latency_ms=0)
             model = "integrity-gate"
             async with Session() as session:
+                if not replay_id and not issues:
+                    previous = await session.scalar(select(AnalysisRecord).where(AnalysisRecord.asset == asset,
+                        AnalysisRecord.mode == "EXPERIMENTAL").order_by(AnalysisRecord.created_at.desc()).limit(1))
+                    if previous:
+                        original = await session.get(MarketSnapshot, previous.snapshot_id)
+                        if original and reusable_wait(previous, snapshot, Snapshot.model_validate(original.data), utcnow()):
+                            previous.reuse_reason = "Contexto de confirmação sem novo candle; análise anterior mantida sem chamar o Claude. Custo desta solicitação: US$ 0."
+                            log.info("analysis_reused", analysis_id=previous.id, asset=asset, new_api_cost_usd=0)
+                            return previous
                 cutoff = snapshot.captured_at
                 past = (await session.scalars(select(AnalysisRecord).where(AnalysisRecord.asset == asset,
                          AnalysisRecord.created_at < cutoff, AnalysisRecord.mode == "EXPERIMENTAL")
@@ -126,7 +137,7 @@ class AnalysisService:
                     "data_cutoff_utc": snapshot.captured_at.isoformat(),
                     "price": (snapshot.quote.bid + snapshot.quote.ask) / 2 if snapshot.quote else None,
                     "valid_until": (snapshot.captured_at + timedelta(minutes=result.trade_plan.valid_for_minutes)).isoformat() if result.trade_plan else None,
-                    "context_candles": metadata.pop("context_candles", {}), "analysis_version": 2,
+                    "context_candles": metadata.pop("context_candles", {}), "analysis_version": 4,
                     "spread_usd": snapshot.quote.ask - snapshot.quote.bid if snapshot.quote else None,
                 }
                 if result.trade_plan:
@@ -134,12 +145,14 @@ class AnalysisService:
                     worst_entry = plan.entry_high if plan.side == "COMPRA" else plan.entry_low
                     risk = abs(worst_entry - plan.stop_loss)
                     result_data["market_reference"]["gross_risk_reward"] = [abs(target.price - worst_entry) / risk for target in plan.targets]
+                quality = assess_setup(result_data.get("trade_plan"), result_data["market_reference"]["spread_usd"], self.config.minimum_setup_rr)
+                result_data["setup_quality"] = quality
                 record = AnalysisRecord(snapshot_id=snapshot_id, asset=asset, decision=result.decision,
                                         data=result_data, mode=mode, model=model, **metadata)
                 session.add(record)
                 await session.flush()
                 session.add(Audit(action="ANALYSIS", actor=actor, details={"analysis_id": record.id, "snapshot_id": snapshot_id, "mode": mode}))
-                if mode == "EXPERIMENTAL":
+                if mode == "EXPERIMENTAL" and quality["status"] != "REPROVADO":
                     await self.update_alerts(session, asset, result, snapshot, record.id)
                 await session.commit()
             log.info("analysis_recorded", asset=asset, analysis_id=record.id, decision=result.decision,
@@ -209,5 +222,12 @@ def serialize(record):
             for c in record.__table__.columns if (v := getattr(record, c.name)) is not None}
 
     if isinstance(record, AnalysisRecord):
+        quality = assess_setup(record.data.get("trade_plan"), record.data.get("market_reference", {}).get("spread_usd"), settings().minimum_setup_rr)
+        data["data"] = {**record.data, "setup_quality": quality}
+        data["model_verdict"] = {Decision.BULL: "COMPRA", Decision.BEAR: "VENDA"}.get(record.decision, "AGUARDAR")
+        if getattr(record, "reuse_reason", None):
+            data.update(reused=True, request_cost_usd=0, status=record.reuse_reason)
         data["verdict"] = {Decision.BULL: "COMPRA", Decision.BEAR: "VENDA"}.get(record.decision, "AGUARDAR")
+        if quality["status"] == "REPROVADO":
+            data["verdict"] = "AGUARDAR"
     return data

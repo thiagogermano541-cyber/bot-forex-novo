@@ -169,6 +169,16 @@ class SignalTarget(StrictModel):
     source_ids: list[str] = Field(min_length=1, max_length=64)
 
 
+class ExecutionTrigger(StrictModel):
+    kind: Literal["ROMPIMENTO_ALTA", "ROMPIMENTO_BAIXA", "RETESTE_ALTA", "RETESTE_BAIXA", "REJEICAO", "OBSERVADO"]
+    level: float = Field(gt=0)
+    description: str = Field(min_length=8, max_length=500)
+    source_ids: list[str] = Field(min_length=1, max_length=64)
+    volume_multiple: float | None = Field(default=None, gt=0, le=10)
+    volume_baseline: float | None = Field(default=None, gt=0)
+    volume_source_ids: list[str] = Field(default_factory=list)
+
+
 class TradePlan(StrictModel):
     side: Literal["COMPRA", "VENDA"]
     status: Literal["CONFIRMADO", "PENDENTE"] = Field(description="PENDENTE exige decision=AGUARDAR; use CONFIRMADO somente com confirmação já observada.")
@@ -182,6 +192,7 @@ class TradePlan(StrictModel):
     targets: list[SignalTarget] = Field(min_length=1, max_length=3)
     valid_for_minutes: int = Field(ge=1, le=60)
     cancel_if: list[str] = Field(min_length=1, max_length=20)
+    trigger: ExecutionTrigger | None = None
 
     @model_validator(mode="after")
     def geometry(self):
@@ -244,6 +255,8 @@ class Analysis(StrictModel):
         plan = self.trade_plan
         if plan:
             references += plan.confirmation_source_ids
+            if plan.trigger:
+                references += plan.trigger.source_ids + plan.trigger.volume_source_ids
             references += [i for target in plan.targets for i in target.source_ids]
         unknown = sorted(set(references) - known)
         if unknown:

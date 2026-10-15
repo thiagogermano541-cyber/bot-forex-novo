@@ -69,11 +69,13 @@ async def main():
         if denied.status_code != 422:
             raise RuntimeError("Non-BTC analysis was not rejected")
         latest_verdict = None
+        latest_quality = None
         for path in ("analyses", "alerts", "metrics"):
             result = await client.get(f"{origin}/api/{path}")
             result.raise_for_status()
             if path == "analyses" and result.json():
                 latest_verdict = result.json()[0].get("verdict")
+                latest_quality = result.json()[0].get("data", {}).get("setup_quality")
         if config.json().get("analysis_mode") != "MANUAL" or config.json().get("daily_budget_enabled") is not False:
             raise RuntimeError("Expected on-demand analysis configuration")
         await client.post(f"{origin}/api/auth/logout", headers={"Origin": origin}, json={})
@@ -81,6 +83,9 @@ async def main():
                           "claude_status": config.json().get("claude"),
                           "btc_market": market_summary, "analysis_mode": config.json().get("analysis_mode"),
                           "daily_budget_enabled": config.json().get("daily_budget_enabled"), "latest_verdict": latest_verdict,
+                          "analysis_protocol_version": config.json().get("analysis_protocol_version"),
+                          "max_analysis_attempts": config.json().get("max_analysis_attempts"),
+                          "latest_setup_quality": latest_quality, "paid_analysis_requests": 0,
                           "checks": ["dashboard", "readiness", "login", "secure_cookie", "permissions", "markets", "history", "alerts", "metrics", "no_exposed_secrets"]}), flush=True)
 
 
